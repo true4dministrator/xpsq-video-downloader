@@ -72,7 +72,7 @@ class _BasePanel(QWidget):
 
         # 按钮行
         btn_lay = QHBoxLayout()
-        self.btn_start = QPushButton("开始下载" if self.mode == "video" else "提取文章")
+        self.btn_start = QPushButton("开始下载" if self.mode != "article" else "提取文章")
         self.btn_start.setObjectName("primary")
         self.btn_start.clicked.connect(self.start_task)
         self.btn_cancel = QPushButton("取消")
@@ -138,7 +138,7 @@ class _BasePanel(QWidget):
     def _on_progress(self, d: dict) -> None:
         ev = d.get("event")
         if ev == "extracting":
-            self.status.setText("正在解析页面，识别内容…" if self.mode == "video" else "正在识别正文…")
+            self.status.setText("正在解析页面，识别内容…" if self.mode != "article" else "正在识别正文…")
             self.progress.setRange(0, 0)
         elif ev == "sniffing":
             self.status.setText(d.get("note", "尝试万能嗅探…"))
@@ -241,6 +241,31 @@ class VideoPanel(_BasePanel):
         self.cfg["download"]["subtitles"] = self.sub_check.isChecked()
         save_config(self.cfg)
         return VideoWorker(url, save_dir, self.cfg, audio_only=audio_only)
+
+
+class MusicPanel(_BasePanel):
+    """音乐下载：粘贴音乐站链接（网易云/QQ音乐/SoundCloud/Bandcamp 等），下载为音频。"""
+    mode = "music"
+
+    def _build(self) -> None:
+        super()._build()
+        self.url_edit.setPlaceholderText(
+            "粘贴音乐链接，如 https://music.163.com/song?id=xxx / https://soundcloud.com/xxx")
+        dl = self.cfg.get("download", {})
+        self.audio_fmt_combo = QComboBox()
+        self.audio_fmt_combo.addItems(["MP3（VBR 最高质量）", "MP3 320kbps", "M4A（AAC）", "原始格式"])
+        self.audio_fmt_combo.setCurrentIndex(
+            {"mp3": 0, "mp3-320": 1, "m4a": 2, "raw": 3}.get(
+                dl.get("music_format", "mp3"), 0))
+        for w in (QLabel("音质"), self.audio_fmt_combo):
+            self.opt_lay.addWidget(w)
+        self.opt_lay.addStretch()
+
+    def _make_worker(self, url: str, save_dir: str):
+        fmt = ("mp3", "mp3-320", "m4a", "raw")[self.audio_fmt_combo.currentIndex()]
+        self.cfg.setdefault("download", {})["music_format"] = fmt
+        save_config(self.cfg)
+        return VideoWorker(url, save_dir, self.cfg, audio_only=True, audio_format=fmt)
 
 
 class ArticlePanel(_BasePanel):

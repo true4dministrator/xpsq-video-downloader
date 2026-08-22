@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget,
 from .. import APP_NAME, APP_VERSION
 from ..core.ffmpeg import check_ffmpeg, find_ffmpeg
 from ..logging_setup import LOGS_DIR
-from .panels import ArticlePanel, VideoPanel
+from .panels import ArticlePanel, MusicPanel, VideoPanel
 from .settings_page import SettingsPage
 from .theme import C
 
@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
 
         self.nav = QListWidget()
         self.nav.addItem(QListWidgetItem("视频下载"))
+        self.nav.addItem(QListWidgetItem("音乐下载"))
         self.nav.addItem(QListWidgetItem("文章提取"))
         self.nav.addItem(QListWidgetItem("设置"))
         self.nav.setCurrentRow(0)
@@ -69,9 +70,10 @@ class MainWindow(QMainWindow):
         # 主区域
         self.stack = QStackedWidget()
         self.video_panel = VideoPanel()
+        self.music_panel = MusicPanel()
         self.article_panel = ArticlePanel()
         self.settings_page = SettingsPage()
-        for p in (self.video_panel, self.article_panel, self.settings_page):
+        for p in (self.video_panel, self.music_panel, self.article_panel, self.settings_page):
             self.stack.addWidget(p)
         lay.addWidget(self.stack, 1)
 
@@ -91,6 +93,7 @@ class MainWindow(QMainWindow):
         idx = self.nav.currentRow()
         saved = {
             "video": (self.video_panel.url_edit.text(), self.video_panel.dir_edit.text()),
+            "music": (self.music_panel.url_edit.text(), self.music_panel.dir_edit.text()),
             "article": (self.article_panel.url_edit.text(), self.article_panel.dir_edit.text()),
         }
         while self.stack.count():
@@ -98,12 +101,15 @@ class MainWindow(QMainWindow):
             self.stack.removeWidget(w)
             w.deleteLater()
         self.video_panel = VideoPanel()
+        self.music_panel = MusicPanel()
         self.article_panel = ArticlePanel()
         self.settings_page = SettingsPage()
-        for p in (self.video_panel, self.article_panel, self.settings_page):
+        for p in (self.video_panel, self.music_panel, self.article_panel, self.settings_page):
             self.stack.addWidget(p)
         self.video_panel.url_edit.setText(saved["video"][0])
         self.video_panel.dir_edit.setText(saved["video"][1])
+        self.music_panel.url_edit.setText(saved["music"][0])
+        self.music_panel.dir_edit.setText(saved["music"][1])
         self.article_panel.url_edit.setText(saved["article"][0])
         self.article_panel.dir_edit.setText(saved["article"][1])
         self._style_sidebar()

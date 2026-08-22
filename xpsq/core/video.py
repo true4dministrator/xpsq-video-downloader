@@ -143,13 +143,15 @@ class VideoDownloader:
             self.progress_cb({"event": "postprocessing",
                               "postprocessor": d.get("postprocessor", "")})
 
-    def download(self, url: str, save_dir: str, audio_only: bool = False) -> TaskResult:
+    def download(self, url: str, save_dir: str, audio_only: bool = False,
+                 audio_format: str = "mp3") -> TaskResult:
         import yt_dlp
         task_id = new_task_id()
         result = TaskResult(mode="video", task_id=task_id, url=url, env=version.APP_NAME_EN)
         logger = TaskLogger(task_id)
         result.log_file = logger.file
-        logger.log("video_start", {"url": url, "save_dir": save_dir, "audio_only": audio_only})
+        logger.log("video_start", {"url": url, "save_dir": save_dir, "audio_only": audio_only,
+                                   "audio_format": audio_format})
         try:
             self._started = time.time()
             self._downloaded = 0.0
@@ -166,15 +168,18 @@ class VideoDownloader:
                 final = info.get("_filename") or filename
                 path = final if os.path.exists(final) else (
                     _find_actual_file(save_dir, info.get("id"), info.get("title"), audio_only))
-                # 音频模式：下载完音频流后自行转 MP3（不依赖 ffprobe）
+                # 音频模式：下载完音频流后自行转码（不依赖 ffprobe）
                 if audio_only and path:
                     self.progress_cb({"event": "postprocessing",
-                                      "postprocessor": "提取音频", "note": "正在转换为 MP3…"})
-                    mp3_path = _extract_audio_mp3(path)
-                    if mp3_path:
-                        path = mp3_path
+                                      "postprocessor": "转码音频", "note": "正在转码…"})
+                    if audio_format == "raw":
+                        pass  # 保留原始音频格式
                     else:
-                        raise AppError(ERR_FFMPEG, "音频提取失败")
+                        converted = _convert_audio(path, audio_format)
+                        if converted:
+                            path = converted
+                        else:
+                            raise AppError(ERR_FFMPEG, "音频转码失败")
                 ext = Path(path).suffix.lstrip(".") if path else ("mp3" if audio_only else "")
                 result.mark_success(
                     title=info.get("title") or info.get("id") or "",
@@ -206,27 +211,37 @@ class VideoDownloader:
             logger.close()
 
 
-def _extract_audio_mp3(src: str) -> str | None:
-    """用 ffmpeg 把音频文件转成 MP3（VBR 最高质量），成功后删除中间文件。"""
+def _convert_audio(src: str, target: str) -> str | None:
+    """用 ffmpeg 把音频转成目标格式（mp3 VBR / mp3 320k / m4a），成功后删除中间文件。"""
     ff = find_ffmpeg()
     if not ff:
-        raise AppError(ERR_FFMPEG, "需要 ffmpeg 提取音频")
-    dst = Path(src).with_suffix(".mp3")
-    cmd = [ff, "-y", "-i", src, "-vn", "-c:a", "libmp3lame", "-q:a", "0", str(dst)]
+        raise AppError(ERR_FFMPEG, "需要 ffmpeg 转码音频")
+    ext_map = {"mp3": ".mp3", "mp3-320": ".mp3", "m4a": ".m4a"}
+    dst = Path(src).with_suffix(ext_map.get(target, ".mp3"))
+    # 源文件已是目标格式（如网易云源就是 mp3）→ 直接保留，不重复转码
+    if Path(src).suffix.lower() == dst.suffix.lower():
+        return src
+    if target == "m4a":
+        codec_args = ["-c:a", "aac", "-b:a", "256k"]
+    elif target == "mp3-320":
+        codec_args = ["-c:a", "libmp3lame", "-b:a", "320k"]
+    else:
+        codec_args = ["-c:a", "libmp3lame", "-q:a", "0"]
+    cmd = [ff, "-y", "-i", src, "-vn", *codec_args, str(dst)]
     kwargs: dict = {}
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, **kwargs)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, **kwargs)
     except Exception as exc:
-        raise AppError(ERR_FFMPEG, f"音频提取失败: {exc}") from exc
+        raise AppError(ERR_FFMPEG, f"音频转码失败: {exc}") from exc
     if proc.returncode != 0 or not dst.exists():
         try:
             dst.unlink(missing_ok=True)
         except Exception:
             pass
         err_tail = (proc.stderr or "")[-200:]
-        raise AppError(ERR_FFMPEG, f"音频提取失败: {err_tail}")
+        raise AppError(ERR_FFMPEG, f"音频转码失败: {err_tail}")
     try:
         os.remove(src)
     except Exception:

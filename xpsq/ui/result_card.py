@@ -58,7 +58,7 @@ class ResultCard(QFrame):
         color = C["success"] if ok else C["danger"]
         dot = QLabel("●")
         dot.setStyleSheet(f"color:{color};font-size:14px;")
-        status_text = "下载完成" if self.result.mode == "video" else "提取完成"
+        status_text = "下载完成" if self.result.mode in ("video", "music") else "提取完成"
         if not ok:
             status_text = "任务失败" if self.result.status != "cancelled" else "任务已取消"
         st = QLabel(status_text)
