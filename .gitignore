@@ -42,3 +42,8 @@ test_output/
 # IDE
 .idea/
 .vscode/
+
+# Nuitka 构建产物
+build_nuitka/
+main.dist/
+main.build/
