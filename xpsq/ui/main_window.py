@@ -7,6 +7,8 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget,
                                QVBoxLayout, QWidget)
 
 from .. import APP_NAME, APP_VERSION
+from ..core.ffmpeg import check_ffmpeg, find_ffmpeg
+from ..logging_setup import LOGS_DIR
 from .panels import ArticlePanel, VideoPanel
 from .settings_page import SettingsPage
 
@@ -17,7 +19,19 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.resize(880, 620)
         self.setMinimumSize(720, 520)
+        self._startup_selfcheck()
         self._build()
+
+    def _startup_selfcheck(self) -> None:
+        """启动自检：ffmpeg 探测结果写入日志，便于排查。"""
+        try:
+            ok, info = check_ffmpeg()
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            with open(LOGS_DIR / "startup.log", "a", encoding="utf-8") as f:
+                f.write(f"[{__import__('datetime').datetime.now().isoformat(timespec='seconds')}] "
+                        f"ffmpeg={'OK' if ok else 'MISSING'} path={find_ffmpeg()} info={info}\n")
+        except Exception:
+            pass
 
     def _build(self) -> None:
         central = QWidget()

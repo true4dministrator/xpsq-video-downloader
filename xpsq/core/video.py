@@ -53,6 +53,13 @@ def _build_ydl_opts(cfg: dict, save_dir: str, progress_cb: ProgressCb, task_logg
         "noprogress": True,
         "windowsfilenames": True,
     }
+    # 显式告知 yt-dlp ffmpeg 位置（打包版不在 PATH 上，必须显式传入）
+    ffmpeg_path = find_ffmpeg()
+    if ffmpeg_path:
+        opts["ffmpeg_location"] = ffmpeg_path
+        task_logger.log("ffmpeg_found", {"path": ffmpeg_path})
+    else:
+        task_logger.log("ffmpeg_missing", {"hint": "ffmpeg 未定位到，需要合并的视频将失败"})
     if net.get("sleep_interval"):
         opts["sleep_interval"] = int(net.get("sleep_interval", 2))
     if net.get("proxy"):
