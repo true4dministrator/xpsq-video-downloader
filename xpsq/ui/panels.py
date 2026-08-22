@@ -13,79 +13,8 @@ from .. import APP_NAME
 from ..config import load_config, save_config
 from ..core.result import TaskResult
 from .result_card import ResultCard
+from .theme import C
 from .workers import ArticleWorker, VideoWorker
-
-BASE_QSS = """
-* { font-family: "Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif; font-size: 13px; }
-QMainWindow, QWidget { background: #f5f6f8; color: #222; }
-QLabel { color: #222; background: transparent; }
-QLineEdit, QComboBox, QSpinBox {
-  padding: 6px 10px; border: 1px solid #d5d9dd; border-radius: 8px;
-  background: #fff; color: #222; selection-background-color: #3b82f6;
-  selection-color: #fff;
-}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #3b82f6; }
-QLineEdit:disabled { background: #f0f1f3; color: #999; }
-QComboBox::drop-down { border: none; width: 24px; }
-QComboBox::down-arrow {
-  width: 0; height: 0; border-left: 4px solid transparent;
-  border-right: 4px solid transparent; border-top: 5px solid #666; margin-right: 8px;
-}
-QComboBox QAbstractItemView {
-  background: #fff; color: #222; border: 1px solid #d5d9dd;
-  selection-background-color: #e2ebfd; selection-color: #1d4ed8; outline: 0;
-}
-QSpinBox::up-button, QSpinBox::down-button { background: #fff; border: none; width: 18px; }
-QSpinBox::up-arrow { width: 0; height: 0; border-left: 4px solid transparent;
-  border-right: 4px solid transparent; border-bottom: 5px solid #666; }
-QSpinBox::down-arrow { width: 0; height: 0; border-left: 4px solid transparent;
-  border-right: 4px solid transparent; border-top: 5px solid #666; }
-QPushButton {
-  padding: 7px 16px; border: 1px solid #d5d9dd; border-radius: 8px;
-  background: #fff; color: #222;
-}
-QPushButton:hover { background: #f2f5f8; border-color: #c3c9d0; }
-QPushButton:pressed { background: #e9edf2; }
-QPushButton:disabled { color: #aaa; background: #f2f3f5; border-color: #e3e6e8; }
-QPushButton#primary { background: #3b82f6; color: #fff; border: none; }
-QPushButton#primary:hover { background: #2f6fe0; }
-QPushButton#primary:disabled { background: #a9c7f5; color: #fff; }
-QProgressBar {
-  border: 1px solid #d5d9dd; border-radius: 8px; height: 14px;
-  background: #eef1f4; color: #333; text-align: center; font-size: 10px;
-}
-QProgressBar::chunk { background: #3b82f6; border-radius: 7px; }
-QCheckBox { color: #222; spacing: 6px; background: transparent; }
-QCheckBox::indicator {
-  width: 16px; height: 16px; border: 1px solid #c3c9d0;
-  border-radius: 4px; background: #fff;
-}
-QCheckBox::indicator:hover { border-color: #3b82f6; }
-QCheckBox::indicator:checked { background: #3b82f6; border-color: #3b82f6; }
-QListWidget {
-  background: #fff; border: 1px solid #e3e6e8; border-radius: 10px;
-  color: #222; outline: 0;
-}
-QListWidget::item { padding: 6px 10px; border-radius: 6px; color: #222; }
-QListWidget::item:selected { background: #e2ebfd; color: #1d4ed8; }
-QListWidget::item:hover { background: #eef1f5; }
-QGroupBox {
-  color: #666; font-size: 12px; border: 1px solid #e3e6e8;
-  border-radius: 8px; margin-top: 10px; padding-top: 8px;
-}
-QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
-QScrollBar:vertical { background: #f2f4f6; width: 10px; border-radius: 5px; margin: 0; }
-QScrollBar::handle:vertical { background: #c9ced4; border-radius: 5px; min-height: 30px; }
-QScrollBar::handle:vertical:hover { background: #b3bac2; }
-QScrollBar:horizontal { background: #f2f4f6; height: 10px; border-radius: 5px; margin: 0; }
-QScrollBar::handle:horizontal { background: #c9ced4; border-radius: 5px; min-width: 30px; }
-QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
-QToolTip { background: #fff; color: #222; border: 1px solid #d5d9dd; padding: 4px 8px; border-radius: 6px; }
-QMessageBox { background: #f5f6f8; }
-QMenu { background: #fff; color: #222; border: 1px solid #d5d9dd; }
-QMenu::item { padding: 6px 18px; }
-QMenu::item:selected { background: #e2ebfd; color: #1d4ed8; }
-"""
 
 
 def _dir_row(label_text: str, default_dir: str) -> tuple[QHBoxLayout, QLineEdit]:
@@ -159,7 +88,7 @@ class _BasePanel(QWidget):
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.status = QLabel("就绪")
-        self.status.setStyleSheet("color:#666;font-size:12px;")
+        self.status.setStyleSheet(f"color:{C['muted']};font-size:12px;")
         self.root.addWidget(self.progress)
         self.root.addWidget(self.status)
 
@@ -167,7 +96,7 @@ class _BasePanel(QWidget):
         self.result_stack = QStackedWidget()
         self.empty_lab = QLabel("下载结果将显示在这里")
         self.empty_lab.setAlignment(Qt.AlignCenter)
-        self.empty_lab.setStyleSheet("color:#bbb;font-size:13px;padding:30px;")
+        self.empty_lab.setStyleSheet(f"color:{C['faint']};font-size:13px;padding:30px;")
         self.result_stack.addWidget(self.empty_lab)
         self.result_stack.addWidget(QWidget())  # 占位，卡片直接插入
         self.root.addWidget(self.result_stack, 1)

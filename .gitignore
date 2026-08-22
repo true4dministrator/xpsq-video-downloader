@@ -13,9 +13,15 @@ ffmpeg/
 .venv/
 venv/
 
-# 打包产物
+# 打包产物（多种构建目录变体）
 build/
+build_*/
+build_old/
 dist/
+dist_*/
+dist_old/
+dist_v*_backup/
+dist_x_*/
 *.spec
 
 # 本地配置与日志（含 cookies 信息，绝不入库）

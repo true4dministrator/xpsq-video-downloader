@@ -1,7 +1,8 @@
 """主窗口：左侧栏双模式切换 + 设置。"""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from datetime import datetime
+
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QMainWindow, QStackedWidget,
                                QVBoxLayout, QWidget)
@@ -11,6 +12,7 @@ from ..core.ffmpeg import check_ffmpeg, find_ffmpeg
 from ..logging_setup import LOGS_DIR
 from .panels import ArticlePanel, VideoPanel
 from .settings_page import SettingsPage
+from .theme import C
 
 
 class MainWindow(QMainWindow):
@@ -28,7 +30,7 @@ class MainWindow(QMainWindow):
             ok, info = check_ffmpeg()
             LOGS_DIR.mkdir(parents=True, exist_ok=True)
             with open(LOGS_DIR / "startup.log", "a", encoding="utf-8") as f:
-                f.write(f"[{__import__('datetime').datetime.now().isoformat(timespec='seconds')}] "
+                f.write(f"[{datetime.now().isoformat(timespec='seconds')}] "
                         f"ffmpeg={'OK' if ok else 'MISSING'} path={find_ffmpeg()} info={info}\n")
         except Exception:
             pass
@@ -44,17 +46,17 @@ class MainWindow(QMainWindow):
         sidebar = QWidget()
         sidebar.setFixedWidth(140)
         sidebar.setStyleSheet(
-            "QWidget#sidebar{background:#f5f7fa;border-radius:12px;}"
+            f"QWidget#sidebar{{background:{C['sidebar_bg']};border-radius:12px;}}"
             "QListWidget{border:none;background:transparent;font-size:13px;outline:0;}"
             "QListWidget::item{padding:10px 12px;border-radius:8px;margin:2px 6px;}"
-            "QListWidget::item:selected{background:#e2ebfd;color:#1d4ed8;font-weight:600;}"
-            "QListWidget::item:hover{background:#eef1f5;}")
+            f"QListWidget::item:selected{{background:{C['selected_bg']};color:{C['selected_text']};font-weight:600;}}"
+            f"QListWidget::item:hover{{background:{C['hover']};}}")
         sidebar.setObjectName("sidebar")
         sl = QVBoxLayout(sidebar)
         sl.setContentsMargins(0, 12, 0, 12)
 
         title = QLabel(APP_NAME)
-        title.setStyleSheet("font-size:16px;font-weight:700;padding:4px 16px 12px;color:#1d2b3a;")
+        title.setStyleSheet(f"font-size:16px;font-weight:700;padding:4px 16px 12px;color:{C['sidebar_title']};")
         sl.addWidget(title)
 
         self.nav = QListWidget()
@@ -64,7 +66,7 @@ class MainWindow(QMainWindow):
         self.nav.setCurrentRow(0)
         sl.addWidget(self.nav, 1)
         ver = QLabel(f"v{APP_VERSION}")
-        ver.setStyleSheet("color:#bbb;font-size:11px;padding:4px 16px;")
+        ver.setStyleSheet(f"color:{C['faint']};font-size:11px;padding:4px 16px;")
         sl.addWidget(ver)
 
         lay.addWidget(sidebar)
@@ -78,8 +80,34 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(p)
         lay.addWidget(self.stack, 1)
 
-        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.nav.currentRowChanged.connect(lambda i: self.stack.setCurrentIndex(i))
+
+    def rebuild_theme(self) -> None:
+        """主题切换后重建主界面，保留输入框内容与当前页面。"""
+        idx = self.nav.currentRow()
+        saved = {
+            "video": (self.video_panel.url_edit.text(), self.video_panel.dir_edit.text()),
+            "article": (self.article_panel.url_edit.text(), self.article_panel.dir_edit.text()),
+        }
+        while self.stack.count():
+            w = self.stack.widget(0)
+            self.stack.removeWidget(w)
+            w.deleteLater()
+        self.video_panel = VideoPanel()
+        self.article_panel = ArticlePanel()
+        self.settings_page = SettingsPage()
+        for p in (self.video_panel, self.article_panel, self.settings_page):
+            self.stack.addWidget(p)
+        self.video_panel.url_edit.setText(saved["video"][0])
+        self.video_panel.dir_edit.setText(saved["video"][1])
+        self.article_panel.url_edit.setText(saved["article"][0])
+        self.article_panel.dir_edit.setText(saved["article"][1])
+        if 0 <= idx < self.stack.count():
+            self.stack.setCurrentIndex(idx)
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        self.settings_page.save()
+        try:
+            self.settings_page.save(rebuild=False)
+        except Exception:
+            pass
         super().closeEvent(event)

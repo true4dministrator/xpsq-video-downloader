@@ -15,6 +15,10 @@ from .. import APP_NAME, APP_TAGLINE, APP_VERSION
 from ..config import load_config, save_config
 from ..core.ffmpeg import check_ffmpeg
 from ..logging_setup import open_log_dir
+from .theme import C, apply_theme
+
+GITHUB_URL = "https://github.com/true4dministrator/xpsq-video-downloader"
+BLOG_URL = "https://zchlab.space"
 
 CATEGORIES = ["通用", "网络与代理", "下载", "文章提取", "Cookies 登录", "关于"]
 
@@ -199,7 +203,7 @@ class SettingsPage(QWidget):
         tip = QLabel("重要：仅导入你自己的账号 cookies，用于保存你有权查看的内容。"
                      "软件不做任何付费墙绕过。")
         tip.setWordWrap(True)
-        tip.setStyleSheet("color:#8a6d3b;background:#fdf6e3;border-radius:8px;padding:10px;")
+        tip.setStyleSheet(f"color:{C['warn_text']};background:{C['warn_bg']};border-radius:8px;padding:10px;")
         form.addRow(tip)
         return self._scrolled(w)
 
@@ -231,7 +235,7 @@ class SettingsPage(QWidget):
         tag = QLabel(APP_TAGLINE)
         tag.setAlignment(Qt.AlignCenter)
         tag.setWordWrap(True)
-        tag.setStyleSheet("color:#8a6d3b;background:#fdf6e3;border-radius:10px;"
+        tag.setStyleSheet(f"color:{C['warn_text']};background:{C['warn_bg']};border-radius:10px;"
                           "font-size:14px;font-weight:600;padding:12px 20px;")
         v.addWidget(tag)
         v.addSpacing(18)
@@ -240,9 +244,20 @@ class SettingsPage(QWidget):
         info = QLabel(f"版本 v{APP_VERSION} · ffmpeg：{'正常' if ff_ok else '缺失'}"
                       + (f"\n{ff_info}" if not ff_ok else ""))
         info.setAlignment(Qt.AlignCenter)
-        info.setStyleSheet("color:#666;font-size:12px;line-height:1.6;")
+        info.setStyleSheet(f"color:{C['muted']};font-size:12px;line-height:1.6;")
         v.addWidget(info)
-        v.addSpacing(14)
+        v.addSpacing(6)
+
+        # 网站引流 + 开源仓库
+        blog = self._link_label("访问 zchlab.space！", BLOG_URL)
+        blog.setStyleSheet(f"color:{C['accent']};font-size:14px;font-weight:600;")
+        blog.setAlignment(Qt.AlignCenter)
+        v.addWidget(blog)
+        gh = self._link_label("GitHub：开源仓库", GITHUB_URL)
+        gh.setAlignment(Qt.AlignCenter)
+        gh.setStyleSheet(f"color:{C['muted']};font-size:12px;")
+        v.addWidget(gh)
+        v.addSpacing(10)
 
         btn_lay = QHBoxLayout()
         b_check = QPushButton("检查更新")
@@ -259,19 +274,27 @@ class SettingsPage(QWidget):
 
         note = QLabel("仅供个人学习使用 · 请遵守各平台服务条款")
         note.setAlignment(Qt.AlignCenter)
-        note.setStyleSheet("color:#bbb;font-size:11px;")
+        note.setStyleSheet(f"color:{C['faint']};font-size:11px;")
         v.addWidget(note)
         return self._scrolled(w)
 
+    def _link_label(self, text: str, url: str) -> QLabel:
+        lab = QLabel(f'<a href="{url}" style="text-decoration:none;">{text}</a>')
+        lab.setOpenExternalLinks(True)
+        lab.setCursor(Qt.PointingHandCursor)
+        return lab
+
     def _share(self) -> None:
-        QGuiApplication.clipboard().setText(
-            f"推荐一个工具：{APP_NAME}，{APP_TAGLINE}（v{APP_VERSION}）")
-        QMessageBox.information(self, APP_NAME, "已复制分享文案到剪贴板")
+        text = (f"推荐一个工具：{APP_NAME}，{APP_TAGLINE}（v{APP_VERSION}）\n"
+                f"开源地址：{GITHUB_URL}\n{BLOG_URL}")
+        QGuiApplication.clipboard().setText(text)
+        QMessageBox.information(self, APP_NAME, "已复制分享文案（含 GitHub 链接）到剪贴板")
 
     # ---------------- 保存 ----------------
-    def save(self) -> None:
+    def save(self, rebuild: bool = True) -> None:
         g, n, d, a, c = (self.cfg.setdefault(k, {}) for k in
                          ("general", "network", "download", "article", "cookies"))
+        theme_changed = g.get("theme") != ("system", "light", "dark")[self.cb_theme.currentIndex()]
         g["theme"] = ("system", "light", "dark")[self.cb_theme.currentIndex()]
         g["history_limit"] = self.sp_history.value()
         g["log_level"] = self.cb_loglevel.currentText()
@@ -294,3 +317,12 @@ class SettingsPage(QWidget):
 
         c["cookies_file"] = self.ed_cookies.text().strip()
         save_config(self.cfg)
+
+        if rebuild and theme_changed:
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None:
+                apply_theme(app, g["theme"])
+                win = self.window()
+                if win is not None and hasattr(win, "rebuild_theme"):
+                    win.rebuild_theme()

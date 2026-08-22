@@ -13,10 +13,7 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QGroupBox, QHBoxLayout,
 from ..core.result import TaskResult
 from ..errors import ERR_IMG_PARTIAL
 from ..logging_setup import open_log_dir
-
-GREEN = "#2e8b57"
-RED = "#c0392b"
-GRAY = "#888888"
+from .theme import C
 
 
 def _human_size(n: float) -> str:
@@ -30,13 +27,13 @@ def _human_size(n: float) -> str:
 def _metric(parent: QWidget, label: str, value: str) -> QWidget:
     box = QFrame(parent)
     box.setStyleSheet(
-        f"QFrame{{background:#f4f6f8;border-radius:8px;}}")
+        f"QFrame{{background:{C['metric_bg']};border-radius:8px;}}")
     lay = QVBoxLayout(box)
     lay.setContentsMargins(12, 8, 12, 8)
     lab = QLabel(label)
-    lab.setStyleSheet("color:#888;font-size:11px;")
+    lab.setStyleSheet(f"color:{C['muted']};font-size:11px;")
     val = QLabel(value or "-")
-    val.setStyleSheet("font-size:16px;font-weight:600;color:#222;")
+    val.setStyleSheet(f"font-size:16px;font-weight:600;color:{C['text']};")
     lay.addWidget(lab)
     lay.addWidget(val)
     return box
@@ -47,7 +44,7 @@ class ResultCard(QFrame):
         super().__init__(parent)
         self.result = result
         self.setStyleSheet(
-            "QFrame{border:1px solid #e3e6e8;border-radius:12px;background:#fff;}"
+            f"QFrame{{border:1px solid {C['border_soft']};border-radius:12px;background:{C['card']};}}"
             "QLabel{background:transparent;}")
         self._build()
 
@@ -58,7 +55,7 @@ class ResultCard(QFrame):
         # 头部：状态 + 标题
         head = QHBoxLayout()
         ok = self.result.status == "success" or self.result.error_code == ERR_IMG_PARTIAL
-        color = GREEN if ok else RED
+        color = C["success"] if ok else C["danger"]
         dot = QLabel("●")
         dot.setStyleSheet(f"color:{color};font-size:14px;")
         status_text = "下载完成" if self.result.mode == "video" else "提取完成"
@@ -73,12 +70,12 @@ class ResultCard(QFrame):
             chip = QLabel(self.result.error_code)
             chip.setStyleSheet(
                 f"color:{color};border:1px solid {color};border-radius:10px;"
-                "padding:2px 10px;font-size:11px;background:#fff;")
+                f"padding:2px 10px;font-size:11px;background:{C['card']};")
             head.addWidget(chip)
         outer.addLayout(head)
 
         title = QLabel(self.result.title or "(无标题)")
-        title.setStyleSheet("font-size:13px;color:#555;")
+        title.setStyleSheet(f"font-size:13px;color:{C['muted']};")
         title.setWordWrap(True)
         outer.addWidget(title)
 
@@ -110,13 +107,13 @@ class ResultCard(QFrame):
             if self.result.img_failed:
                 lines.append(f"失败插图 {len(self.result.img_failed)} 张：{'；'.join(self.result.img_failed[:3])}")
             info.setText("\n".join(lines))
-            info.setStyleSheet("color:#666;font-size:12px;")
+            info.setStyleSheet(f"color:{C['muted']};font-size:12px;")
             info.setWordWrap(True)
             outer.addWidget(info)
         else:
             outer.addSpacing(8)
             msg = QLabel(self.result.friendly)
-            msg.setStyleSheet("color:#333;font-size:13px;")
+            msg.setStyleSheet(f"color:{C['text']};font-size:13px;")
             msg.setWordWrap(True)
             outer.addWidget(msg)
 
@@ -125,14 +122,15 @@ class ResultCard(QFrame):
             box.setCheckable(True)
             box.setChecked(False)
             box.setStyleSheet(
-                "QGroupBox{font-size:12px;color:#777;border:1px solid #e3e6e8;"
+                f"QGroupBox{{font-size:12px;color:{C['muted']};border:1px solid {C['border_soft']};"
                 "border-radius:8px;margin-top:8px;padding-top:10px;}"
                 "QGroupBox::indicator{width:14px;height:14px;}")
             dev = QLabel(self.result.to_dev_text())
             dev.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            dev.setStyleSheet("font-family:Consolas,'Courier New',monospace;"
-                              "font-size:11px;color:#444;background:#f7f8fa;"
-                              "border-radius:6px;padding:8px;")
+            dev.setStyleSheet(
+                f"font-family:Consolas,'Courier New',monospace;"
+                f"font-size:11px;color:{C['text']};background:{C['metric_bg']};"
+                "border-radius:6px;padding:8px;")
             dev.setTextFormat(Qt.PlainText)
             dev.setWordWrap(True)
             scroll = QScrollArea()
