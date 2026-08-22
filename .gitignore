@@ -47,3 +47,9 @@ test_output/
 build_nuitka/
 main.dist/
 main.build/
+
+# Nuitka 崩溃报告
+nuitka-crash-report.xml
+
+# Nuitka 崩溃报告
+nuitka-crash-report.xml
