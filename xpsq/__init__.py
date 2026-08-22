@@ -1,0 +1,3 @@
+from .version import APP_NAME, APP_NAME_EN, APP_TAGLINE, APP_VERSION
+
+__all__ = ["APP_NAME", "APP_NAME_EN", "APP_TAGLINE", "APP_VERSION"]

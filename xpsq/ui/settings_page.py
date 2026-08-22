@@ -1,0 +1,296 @@
+"""设置页：通用 / 网络与代理 / 下载 / 文章提取 / Cookies / 关于。"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout,
+                               QFrame, QHBoxLayout, QLabel, QLineEdit,
+                               QListWidget, QListWidgetItem, QMessageBox,
+                               QPushButton, QScrollArea, QSpinBox, QStackedWidget,
+                               QVBoxLayout, QWidget)
+
+from .. import APP_NAME, APP_TAGLINE, APP_VERSION
+from ..config import load_config, save_config
+from ..core.ffmpeg import check_ffmpeg
+from ..logging_setup import open_log_dir
+
+CATEGORIES = ["通用", "网络与代理", "下载", "文章提取", "Cookies 登录", "关于"]
+
+
+class SettingsPage(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.cfg = load_config()
+        self._build()
+
+    def _build(self) -> None:
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 18)
+
+        # 左：分类
+        self.cat_list = QListWidget()
+        self.cat_list.setFixedWidth(140)
+        for c in CATEGORIES:
+            QListWidgetItem(c, self.cat_list)
+        self.cat_list.currentRowChanged.connect(self._switch)
+        lay.addWidget(self.cat_list)
+
+        # 右：内容
+        self.stack = QStackedWidget()
+        self._pages = {
+            "通用": self._page_general(),
+            "网络与代理": self._page_network(),
+            "下载": self._page_download(),
+            "文章提取": self._page_article(),
+            "Cookies 登录": self._page_cookies(),
+            "关于": self._page_about(),
+        }
+        for name in CATEGORIES:
+            self.stack.addWidget(self._pages[name])
+        lay.addWidget(self.stack, 1)
+
+        self.cat_list.setCurrentRow(0)
+
+    def _scrolled(self, widget: QWidget) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidget(widget)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        return scroll
+
+    def _switch(self, row: int) -> None:
+        if 0 <= row < len(CATEGORIES):
+            self.stack.setCurrentIndex(row)
+
+    def _page(self) -> tuple[QWidget, QFormLayout]:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(8, 4, 20, 8)
+        form.setSpacing(14)
+        form.setLabelAlignment(Qt.AlignLeft)
+        return w, form
+
+    def _row(self, form: QFormLayout, label: str, widget: QWidget, hint: str = "") -> None:
+        form.addRow(label, widget)
+        if hint:
+            h = QLabel(hint)
+            h.setStyleSheet("color:#999;font-size:11px;")
+            h.setWordWrap(True)
+            form.addRow("", h)
+
+    # ---------------- 通用 ----------------
+    def _page_general(self) -> QWidget:
+        w, form = self._page()
+        self.cb_theme = QComboBox()
+        self.cb_theme.addItems(["跟随系统", "浅色", "深色"])
+        self.cb_theme.setCurrentIndex({"system": 0, "light": 1, "dark": 2}.get(
+            self.cfg.get("general", {}).get("theme", "system"), 0))
+        self._row(form, "主题", self.cb_theme)
+        self.sp_history = QSpinBox()
+        self.sp_history.setRange(20, 1000)
+        self.sp_history.setValue(int(self.cfg.get("general", {}).get("history_limit", 200)))
+        self._row(form, "历史记录条数", self.sp_history)
+        self.cb_loglevel = QComboBox()
+        self.cb_loglevel.addItems(["INFO", "DEBUG"])
+        self.cb_loglevel.setCurrentText(self.cfg.get("general", {}).get("log_level", "INFO"))
+        self._row(form, "日志级别", self.cb_loglevel, "DEBUG 会记录更多请求细节，便于排查问题")
+        w = self._scrolled(w)
+        return w
+
+    # ---------------- 网络与代理 ----------------
+    def _page_network(self) -> QWidget:
+        w, form = self._page()
+        net = self.cfg.get("network", {})
+        self.cb_imp = QComboBox()
+        self.cb_imp.addItems(["chrome", "edge", "safari", "off"])
+        self.cb_imp.setCurrentText(net.get("impersonate", "chrome"))
+        self._row(form, "伪装目标", self.cb_imp, "模仿真实浏览器 TLS 指纹，绕过站点识别")
+        self.sp_conc = QSpinBox()
+        self.sp_conc.setRange(1, 32)
+        self.sp_conc.setValue(int(net.get("concurrency", 8)))
+        self._row(form, "并发分片数", self.sp_conc, "越大越快，越容易被站点限速")
+        self.sp_sleep = QSpinBox()
+        self.sp_sleep.setRange(0, 60)
+        self.sp_sleep.setValue(int(net.get("sleep_interval", 2)))
+        self._row(form, "请求间隔(秒)", self.sp_sleep, "缓解风控，建议 ≥ 2s")
+        self.ed_proxy = QLineEdit(net.get("proxy", ""))
+        self.ed_proxy.setPlaceholderText("http://127.0.0.1:7890 · 留空为直连")
+        self._row(form, "HTTP 代理", self.ed_proxy)
+        self.cb_tls = QCheckBox("启用 TLS 指纹伪装")
+        self.cb_tls.setChecked(bool(net.get("tls_impersonation", True)))
+        self._row(form, "TLS 伪装", self.cb_tls)
+        return self._scrolled(w)
+
+    # ---------------- 下载 ----------------
+    def _page_download(self) -> QWidget:
+        w, form = self._page()
+        dl = self.cfg.get("download", {})
+        self.ed_dir = QLineEdit(dl.get("default_dir", str(Path.home() / "Downloads")))
+        b = QPushButton("浏览")
+        def pick():
+            d = QFileDialog.getExistingDirectory(self, "选择默认保存目录", self.ed_dir.text())
+            if d:
+                self.ed_dir.setText(d)
+        b.clicked.connect(pick)
+        row = QHBoxLayout()
+        row.addWidget(self.ed_dir, 1)
+        row.addWidget(b)
+        self._row(form, "默认保存目录", self._h(row))
+        self.cb_quality = QComboBox()
+        self.cb_quality.addItems(["最佳画质", "1080p", "720p"])
+        self.cb_quality.setCurrentIndex({"best": 0, "1080": 1, "720": 2}.get(
+            dl.get("default_quality", "best"), 0))
+        self._row(form, "默认画质", self.cb_quality)
+        self.cb_fmt = QComboBox()
+        self.cb_fmt.addItems(["mp4", "mkv", "原始格式"])
+        self.cb_fmt.setCurrentText({"mp4": "mp4", "mkv": "mkv"}.get(dl.get("default_format", "mp4"), "原始格式"))
+        self._row(form, "默认封装", self.cb_fmt)
+        self.cb_sb = QCheckBox("跳过赞助段落 (SponsorBlock)")
+        self.cb_sb.setChecked(bool(dl.get("sponsorblock", False)))
+        self._row(form, "SponsorBlock", self.cb_sb, "仅部分站点支持，自动剪掉视频内赞助片段")
+        self.cb_sub = QCheckBox("下载字幕")
+        self.cb_sub.setChecked(bool(dl.get("subtitles", False)))
+        self._row(form, "字幕", self.cb_sub)
+        return self._scrolled(w)
+
+    def _h(self, lay: QHBoxLayout) -> QWidget:
+        w = QWidget()
+        w.setLayout(lay)
+        return w
+
+    # ---------------- 文章提取 ----------------
+    def _page_article(self) -> QWidget:
+        w, form = self._page()
+        art = self.cfg.get("article", {})
+        self.cb_a_fmt = QComboBox()
+        self.cb_a_fmt.addItems(["HTML（含插图，推荐）", "Markdown", "纯文本"])
+        self.cb_a_fmt.setCurrentIndex({"html": 0, "markdown": 1, "txt": 2}.get(
+            art.get("default_output_format", "html"), 0))
+        self._row(form, "默认输出格式", self.cb_a_fmt)
+        self.cb_a_img = QCheckBox("下载插图到本地")
+        self.cb_a_img.setChecked(bool(art.get("download_images", True)))
+        self._row(form, "插图", self.cb_a_img)
+        self.sp_max_img = QSpinBox()
+        self.sp_max_img.setRange(1, 200)
+        self.sp_max_img.setValue(int(art.get("max_image_size_mb", 20)))
+        self._row(form, "单张图片上限(MB)", self.sp_max_img, "超过上限的图片跳过，避免撑爆磁盘")
+        return self._scrolled(w)
+
+    # ---------------- Cookies ----------------
+    def _page_cookies(self) -> QWidget:
+        w, form = self._page()
+        ck = self.cfg.get("cookies", {})
+        self.ed_cookies = QLineEdit(ck.get("cookies_file", ""))
+        self.ed_cookies.setPlaceholderText("cookies.txt 路径，留空表示未导入")
+        b = QPushButton("选择文件")
+        def pick():
+            d = QFileDialog.getOpenFileName(self, "选择 cookies.txt",
+                                            str(Path.home()), "Cookies (*.txt);;所有文件 (*)")
+            if d[0]:
+                self.ed_cookies.setText(d[0])
+        b.clicked.connect(pick)
+        row = QHBoxLayout()
+        row.addWidget(self.ed_cookies, 1)
+        row.addWidget(b)
+        self._row(form, "cookies.txt", self._h(row),
+                  "从浏览器导出 cookies.txt（Netscape 格式），用于下载你有权限访问的会员/登录内容")
+        tip = QLabel("重要：仅导入你自己的账号 cookies，用于保存你有权查看的内容。"
+                     "软件不做任何付费墙绕过。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color:#8a6d3b;background:#fdf6e3;border-radius:8px;padding:10px;")
+        form.addRow(tip)
+        return self._scrolled(w)
+
+    # ---------------- 关于 ----------------
+    def _page_about(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(30, 30, 30, 30)
+        v.setAlignment(Qt.AlignHCenter)
+
+        icon = QLabel("▶")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setStyleSheet("font-size:28px;color:#fff;background:#3b82f6;"
+                           "border-radius:18px;max-width:56px;max-height:56px;min-width:56px;min-height:56px;")
+        icon.setFixedSize(56, 56)
+        v.addWidget(icon, 0, Qt.AlignHCenter)
+
+        name = QLabel(APP_NAME)
+        name.setAlignment(Qt.AlignCenter)
+        name.setStyleSheet("font-size:20px;font-weight:600;margin-top:10px;")
+        v.addWidget(name)
+
+        sub = QLabel("视频下载 · 文章提取 · 双模式桌面工具")
+        sub.setAlignment(Qt.AlignCenter)
+        sub.setStyleSheet("color:#888;font-size:12px;")
+        v.addWidget(sub)
+        v.addSpacing(14)
+
+        tag = QLabel(APP_TAGLINE)
+        tag.setAlignment(Qt.AlignCenter)
+        tag.setWordWrap(True)
+        tag.setStyleSheet("color:#8a6d3b;background:#fdf6e3;border-radius:10px;"
+                          "font-size:14px;font-weight:600;padding:12px 20px;")
+        v.addWidget(tag)
+        v.addSpacing(18)
+
+        ff_ok, ff_info = check_ffmpeg()
+        info = QLabel(f"版本 v{APP_VERSION} · ffmpeg：{'正常' if ff_ok else '缺失'}"
+                      + (f"\n{ff_info}" if not ff_ok else ""))
+        info.setAlignment(Qt.AlignCenter)
+        info.setStyleSheet("color:#666;font-size:12px;line-height:1.6;")
+        v.addWidget(info)
+        v.addSpacing(14)
+
+        btn_lay = QHBoxLayout()
+        b_check = QPushButton("检查更新")
+        b_check.clicked.connect(lambda: QMessageBox.information(
+            self, APP_NAME, "当前已是最新版本 v" + APP_VERSION))
+        b_log = QPushButton("打开日志目录")
+        b_log.clicked.connect(lambda: open_log_dir())
+        b_share = QPushButton("分享给朋友")
+        b_share.clicked.connect(self._share)
+        for b in (b_check, b_log, b_share):
+            btn_lay.addWidget(b)
+        v.addLayout(btn_lay)
+        v.addStretch()
+
+        note = QLabel("仅供个人学习使用 · 请遵守各平台服务条款")
+        note.setAlignment(Qt.AlignCenter)
+        note.setStyleSheet("color:#bbb;font-size:11px;")
+        v.addWidget(note)
+        return self._scrolled(w)
+
+    def _share(self) -> None:
+        QGuiApplication.clipboard().setText(
+            f"推荐一个工具：{APP_NAME}，{APP_TAGLINE}（v{APP_VERSION}）")
+        QMessageBox.information(self, APP_NAME, "已复制分享文案到剪贴板")
+
+    # ---------------- 保存 ----------------
+    def save(self) -> None:
+        g, n, d, a, c = (self.cfg.setdefault(k, {}) for k in
+                         ("general", "network", "download", "article", "cookies"))
+        g["theme"] = ("system", "light", "dark")[self.cb_theme.currentIndex()]
+        g["history_limit"] = self.sp_history.value()
+        g["log_level"] = self.cb_loglevel.currentText()
+
+        n["impersonate"] = self.cb_imp.currentText()
+        n["concurrency"] = self.sp_conc.value()
+        n["sleep_interval"] = self.sp_sleep.value()
+        n["proxy"] = self.ed_proxy.text().strip()
+        n["tls_impersonation"] = self.cb_tls.isChecked()
+
+        d["default_dir"] = self.ed_dir.text().strip()
+        d["default_quality"] = ("best", "1080", "720")[self.cb_quality.currentIndex()]
+        d["default_format"] = ("mp4", "mkv", "best")[self.cb_fmt.currentIndex()]
+        d["sponsorblock"] = self.cb_sb.isChecked()
+        d["subtitles"] = self.cb_sub.isChecked()
+
+        a["default_output_format"] = ("html", "markdown", "txt")[self.cb_a_fmt.currentIndex()]
+        a["download_images"] = self.cb_a_img.isChecked()
+        a["max_image_size_mb"] = self.sp_max_img.value()
+
+        c["cookies_file"] = self.ed_cookies.text().strip()
+        save_config(self.cfg)
