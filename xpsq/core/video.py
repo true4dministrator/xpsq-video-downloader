@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Callable
@@ -328,7 +329,8 @@ class FallbackSniffer:
             self._session.cookies = _load_cookies_file(ck)
 
     def sniff(self, url: str) -> tuple[str | None, str]:
-        """返回 (直链, 类型)，类型为 mp4/m3u8/blob/None"""
+        """返回 (直链, 类型)，类型为 mp4/m3u8/blob/None。支持相对路径 urljoin。"""
+        from urllib.parse import urljoin
         try:
             proxy = self.cfg.get("network", {}).get("proxy") or None
             resp = self._session.get(url, timeout=20, allow_redirects=True,
@@ -339,6 +341,12 @@ class FallbackSniffer:
             cands = _MEDIA_RE.findall(html)
             if cands:
                 return cands[0], "mp4"
+            # 相对路径兜底：src/href="xxx.mp4"、src/href='xxx.mp4'
+            rel = re.findall(
+                r'''(?:src|href|data-src)\s*=\s*["']([^"']+\.(?:mp4|webm|m4v|mov|flv|ts|mp3|m4a|aac|ogg|opus)(?:\?[^"']*)?)["']''',
+                html, re.I)
+            if rel:
+                return urljoin(url, rel[0]), "mp4"
             if _BLOB_RE.search(html):
                 return None, "blob"
             return None, None
@@ -366,15 +374,35 @@ class FallbackSniffer:
 
     def _download_direct(self, url: str, dest: Path, referer: str, result: TaskResult,
                          logger: TaskLogger) -> TaskResult:
+        """直链下载：支持 Range 时走多线程分块（类 IDM），否则单线程回退。"""
         proxy = self.cfg.get("network", {}).get("proxy") or None
+        proxies = {"http": proxy, "https": proxy} if proxy else None
         started = time.time()
+
+        # 探测是否支持 Range
+        total = 0
+        accept_ranges = False
+        try:
+            head = self._session.head(url, timeout=20, headers={"Referer": referer}, proxies=proxies)
+            total = int(head.headers.get("content-length", 0) or 0)
+            accept_ranges = (head.headers.get("accept-ranges", "") or "").lower() == "bytes"
+        except Exception:
+            pass
+
+        concurrency = int(self.cfg.get("network", {}).get("concurrency", 8))
+        if total > 2 * 1024 * 1024 and accept_ranges and concurrency > 1:
+            return self._download_direct_mt(url, dest, referer, result, logger,
+                                            total, concurrency, started)
+
+        # 单线程回退
         with self._session.get(url, stream=True, timeout=60,
-                               headers={"Referer": referer},
-                               proxies={"http": proxy, "https": proxy} if proxy else None) as r:
+                               headers={"Referer": referer}, proxies=proxies) as r:
             if r.status_code >= 400:
                 raise AppError(ERR_NETWORK, f"HTTP {r.status_code}")
-            total = int(r.headers.get("content-length", 0) or 0)
+            if not total:
+                total = int(r.headers.get("content-length", 0) or 0)
             done = 0
+            last = {"t": time.time(), "b": 0}
             with open(dest, "wb") as f:
                 for chunk in r.iter_content(1024 * 256):
                     if self.cancel_flag and self.cancel_flag():
@@ -382,11 +410,7 @@ class FallbackSniffer:
                     if chunk:
                         f.write(chunk)
                         done += len(chunk)
-                        self.progress_cb({"event": "downloading",
-                                          "percent": (done / total * 100) if total else 0.0,
-                                          "downloaded": done, "total": total,
-                                          "speed": None, "eta": None,
-                                          "filename": dest.name})
+                        self._emit_progress(dest.name, done, total, last, started)
         elapsed = time.time() - started
         result.mark_success(title=dest.stem, filename=dest.name, path=str(dest),
                             size_bytes=done, media_format=dest.suffix.lstrip("."),
@@ -394,6 +418,86 @@ class FallbackSniffer:
                             avg_speed=_avg_speed(done, elapsed),
                             extractor="fallback-sniffer")
         logger.log("video_success", {"path": str(dest)})
+        return result
+
+    def _emit_progress(self, filename: str, done: int, total: int, last: dict,
+                       started: float, force: bool = False) -> None:
+        """汇报进度（带速度与剩余时间），节流到约每 300ms 一次。"""
+        now = time.time()
+        if not force and now - last["t"] < 0.3:
+            return
+        speed = (done - last["b"]) / (now - last["t"]) if now > last["t"] else 0.0
+        eta = int((total - done) / speed) if speed > 0 and total > done else None
+        last["t"], last["b"] = now, done
+        self.progress_cb({"event": "downloading",
+                          "percent": (done / total * 100) if total else 0.0,
+                          "downloaded": done, "total": total,
+                          "speed": speed, "eta": eta,
+                          "filename": filename})
+
+    def _download_direct_mt(self, url: str, dest: Path, referer: str, result: TaskResult,
+                            logger: TaskLogger, total: int, n: int,
+                            started: float) -> TaskResult:
+        """HTTP Range 多线程分块下载。"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        proxy = self.cfg.get("network", {}).get("proxy") or None
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        n = max(1, min(n, 16))
+        chunk = max(total // n, 1)
+        ranges: list[tuple[int, int]] = []
+        lo = 0
+        while lo < total:
+            hi = min(lo + chunk - 1, total - 1)
+            ranges.append((lo, hi))
+            lo = hi + 1
+
+        with open(dest, "wb") as f:
+            f.truncate(total)  # 预分配
+        state = {"done": 0}
+        lock = threading.Lock()
+        last = {"t": time.time(), "b": 0}
+
+        def worker(lo: int, hi: int) -> bool:
+            headers = {"Range": f"bytes={lo}-{hi}", "Referer": referer, "User-Agent": UA}
+            try:
+                resp = self._session.get(url, headers=headers, stream=True,
+                                         timeout=60, proxies=proxies)
+                if resp.status_code not in (200, 206):
+                    return False
+                with open(dest, "rb+") as f:
+                    f.seek(lo)
+                    for chunk in resp.iter_content(256 * 1024):
+                        if self.cancel_flag and self.cancel_flag():
+                            return False
+                        if chunk:
+                            f.write(chunk)
+                            with lock:
+                                state["done"] += len(chunk)
+                                cur = state["done"]
+                            self._emit_progress(dest.name, cur, total, last, started)
+                return True
+            except Exception:
+                return False
+
+        ok = True
+        with ThreadPoolExecutor(max_workers=n) as ex:
+            futures = [ex.submit(worker, lo, hi) for lo, hi in ranges]
+            for fut in as_completed(futures):
+                if not fut.result():
+                    ok = False
+
+        elapsed = time.time() - started
+        if self.cancel_flag and self.cancel_flag():
+            raise AppError(ERR_CANCELLED, "用户取消")
+        size = dest.stat().st_size if dest.exists() else 0
+        if not ok or size < total * 0.95:
+            raise AppError(ERR_NETWORK, "分块下载不完整，可降低并发数重试")
+        self._emit_progress(dest.name, size, total, last, started, force=True)
+        result.mark_success(title=dest.stem, filename=dest.name, path=str(dest),
+                            size_bytes=size, media_format=dest.suffix.lstrip("."),
+                            elapsed_s=elapsed, avg_speed=_avg_speed(size, elapsed),
+                            extractor="fallback-sniffer-mt")
+        logger.log("video_success", {"path": str(dest), "mt": True, "threads": len(ranges)})
         return result
 
     def _download_m3u8_ffmpeg(self, url: str, dest: Path, referer: str, result: TaskResult,

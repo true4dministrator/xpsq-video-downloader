@@ -34,6 +34,13 @@ def _dir_row(label_text: str, default_dir: str) -> tuple[QHBoxLayout, QLineEdit]
     return lay, edit
 
 
+def _fmt_eta(sec: int) -> str:
+    sec = max(0, int(sec))
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
 class _BasePanel(QWidget):
     mode = "video"
 
@@ -125,12 +132,25 @@ class _BasePanel(QWidget):
         self.cfg = load_config()
         self.btn_start.setEnabled(False)
         self.btn_cancel.setEnabled(True)
+        self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.status.setText("正在启动…")
+        # 清空上一次的结果卡片，避免新旧任务混淆
+        self._show_empty_result()
         self.worker = self._make_worker(url, save_dir)
         self.worker.progress.connect(self._on_progress)
         self.worker.finished_ok.connect(self._on_finished)
         self.worker.start()
+
+    def _show_empty_result(self) -> None:
+        """把结果区重置为占位提示。"""
+        idx = self.result_stack.count() - 1
+        if idx >= 0:
+            old = self.result_stack.widget(idx)
+            self.result_stack.removeWidget(old)
+            old.deleteLater()
+            self.result_stack.insertWidget(idx, self.empty_lab)
+            self.result_stack.setCurrentWidget(self.empty_lab)
 
     def _make_worker(self, url: str, save_dir: str):  # noqa: ANN201 (subclass)
         raise NotImplementedError
@@ -146,11 +166,21 @@ class _BasePanel(QWidget):
             self.progress.setRange(0, 100)
             pct = d.get("percent", 0) or 0
             self.progress.setValue(int(pct))
+            done = d.get("downloaded", 0) or 0
+            total = d.get("total", 0) or 0
             sp = d.get("speed") or 0
-            speed = f"{sp/1024/1024:.1f} MB/s" if sp else ""
-            size = d.get("downloaded", 0) or 0
+            eta = d.get("eta")
+            parts = [f"下载中 {done/1048576:.1f} MB"]
+            if total:
+                parts.append(f"/ {total/1048576:.1f} MB")
+            if sp:
+                parts.append(f"{sp/1048576:.1f} MB/s")
+            if eta:
+                parts.append(f"剩余 {_fmt_eta(eta)}")
             note = d.get("note", "")
-            self.status.setText(f"下载中 {size/1024/1024:.1f} MB · {speed} {note}".strip())
+            if note:
+                parts.append(note)
+            self.status.setText(" · ".join(parts))
         elif ev == "fetching":
             self.status.setText("正在抓取网页…")
         elif ev == "images":
