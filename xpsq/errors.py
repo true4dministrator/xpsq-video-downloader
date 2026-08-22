@@ -56,6 +56,15 @@ def classify_ytdlp_error(exc: BaseException) -> AppError:
     """把 yt-dlp 抛出的异常归类为 AppError。"""
     text = str(exc).lower()
     ctx = {"raw": str(exc)}
+    # 站点改版导致提取器失效（yt-dlp 上游 bug，如 Yandex "Unable to extract data_raw"）
+    if "unable to extract" in text or "please report this issue" in text:
+        return AppError(
+            code=ERR_UNSUPPORTED,
+            message="该站点的解析器已失效（站点可能改版，上游 yt-dlp 已知问题待修复）。"
+                    "可尝试粘贴视频/音频的直链下载，或等待软件升级后重试",
+            dev_detail="".join(__import__("traceback").format_exception(
+                type(exc), exc, exc.__traceback__))[-3000:],
+            context=ctx)
     if "unsupportedurl" in text or "unsupported" in text or "not supported" in text or "no video" in text:
         code = ERR_UNSUPPORTED
     elif "drm" in text or "widevine" in text or "fairplay" in text or "playready" in text:
