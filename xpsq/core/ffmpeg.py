@@ -46,16 +46,32 @@ def find_ffmpeg() -> str | None:
     return None
 
 
-def check_ffmpeg() -> tuple[bool, str]:
+_CHECK_CACHE: tuple | None = None
+
+
+def _no_window_kwargs() -> dict:
+    """windowed 程序里跑子进程必须隐藏控制台窗口，否则会闪终端。"""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
+def check_ffmpeg(force: bool = False) -> tuple[bool, str]:
+    global _CHECK_CACHE
+    if _CHECK_CACHE is not None and not force:
+        return _CHECK_CACHE
     path = find_ffmpeg()
     if not path:
-        return False, "未找到 ffmpeg"
+        _CHECK_CACHE = (False, "未找到 ffmpeg")
+        return _CHECK_CACHE
     try:
-        out = subprocess.run([path, "-version"], capture_output=True, text=True, timeout=10)
+        out = subprocess.run([path, "-version"], capture_output=True, text=True,
+                             timeout=10, **_no_window_kwargs())
         first = out.stdout.splitlines()[0] if out.stdout else "ffmpeg"
-        return True, first
+        _CHECK_CACHE = (True, first)
     except Exception as e:
-        return False, f"ffmpeg 运行失败: {e}"
+        _CHECK_CACHE = (False, f"ffmpeg 运行失败: {e}")
+    return _CHECK_CACHE
 
 
 def ffmpeg_debug() -> str:

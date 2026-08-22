@@ -341,7 +341,11 @@ class FallbackSniffer:
                "-i", url, "-c", "copy", str(dest)]
         self.progress_cb({"event": "downloading", "percent": 0.0, "note": "ffmpeg 正在合并分片…"})
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            popen_kwargs = {}
+            if os.name == "nt":
+                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 不弹控制台窗口
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, **popen_kwargs)
             started = time.time()
             while proc.poll() is None:
                 if self.cancel_flag and self.cancel_flag():
