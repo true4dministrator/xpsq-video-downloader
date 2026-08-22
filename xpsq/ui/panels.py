@@ -143,14 +143,25 @@ class _BasePanel(QWidget):
         self.worker.start()
 
     def _show_empty_result(self) -> None:
-        """把结果区重置为占位提示。"""
-        idx = self.result_stack.count() - 1
-        if idx >= 0:
-            old = self.result_stack.widget(idx)
-            self.result_stack.removeWidget(old)
-            old.deleteLater()
-            self.result_stack.insertWidget(idx, self.empty_lab)
-            self.result_stack.setCurrentWidget(self.empty_lab)
+        """把结果区重置为占位提示。empty_lab 是常驻占位控件，永不删除。"""
+        for i in range(self.result_stack.count()):
+            w = self.result_stack.widget(i)
+            if w is not self.empty_lab:
+                self.result_stack.removeWidget(w)
+                w.deleteLater()
+        if self.result_stack.indexOf(self.empty_lab) < 0:
+            self.result_stack.addWidget(self.empty_lab)
+        self.result_stack.setCurrentWidget(self.empty_lab)
+
+    def _show_result_card(self, card: ResultCard) -> None:
+        """显示结果卡片，替换整个结果区；empty_lab 保留复用。"""
+        for i in range(self.result_stack.count()):
+            w = self.result_stack.widget(i)
+            self.result_stack.removeWidget(w)
+            if w is not self.empty_lab:
+                w.deleteLater()
+        self.result_stack.addWidget(card)
+        self.result_stack.setCurrentWidget(card)
 
     def _make_worker(self, url: str, save_dir: str):  # noqa: ANN201 (subclass)
         raise NotImplementedError
@@ -202,12 +213,7 @@ class _BasePanel(QWidget):
         self._history.insert(0, result)
         self._refresh_history()
         card = ResultCard(result)
-        idx = self.result_stack.count() - 1
-        old = self.result_stack.widget(idx)
-        self.result_stack.removeWidget(old)
-        old.deleteLater()
-        self.result_stack.insertWidget(idx, card)
-        self.result_stack.setCurrentWidget(card)
+        self._show_result_card(card)
         self.status.setText("完成" if result.status == "success" else (
             "已取消" if result.status == "cancelled" else f"失败：{result.error_code}"))
 
@@ -228,12 +234,7 @@ class _BasePanel(QWidget):
         idx = self.history_list.row(item)
         if idx < len(self._history):
             card = ResultCard(self._history[idx])
-            pos = self.result_stack.count() - 1
-            old = self.result_stack.widget(pos)
-            self.result_stack.removeWidget(old)
-            old.deleteLater()
-            self.result_stack.insertWidget(pos, card)
-            self.result_stack.setCurrentWidget(card)
+            self._show_result_card(card)
 
 
 class VideoPanel(_BasePanel):
