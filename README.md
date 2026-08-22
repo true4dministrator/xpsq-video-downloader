@@ -66,7 +66,7 @@ build.bat
 
 | 错误码 | 含义 |
 |---|---|
-| ERR_UNSUPPORTED | 不支持的站点 |
+| ERR_UNSUPPORTED | 不支持的站点，或站点改版导致解析器失效（如 Yandex，见"已知限制"） |
 | ERR_NETWORK | 网络/超时/HTTP 错误 |
 | ERR_ANTIBOT | 被站点风控拦截 |
 | ERR_COOKIE | 需要登录/会员（请导入 cookies） |
@@ -75,7 +75,26 @@ build.bat
 | ERR_FS | 磁盘/权限/文件名问题 |
 | ERR_EXTRACT_EMPTY | 未识别到文章正文 |
 | ERR_IMG_PARTIAL | 部分插图下载失败 |
-| ERR_INTERNAL | 未知内部错误 |
+| ERR_INTERNAL | 未知内部错误（请复制开发者详情反馈） |
+
+## 已知限制
+
+- **Yandex 视频**：yt-dlp 上游提取器失效（Yandex 改版导致 `Unable to extract data_raw`，见 yt-dlp issues #15912 / #13653 / #16047），等待上游修复；如有直链可粘贴直链下载。
+- **VIP / 付费歌曲**：需在设置中导入你自己的 cookies 才能下载，且仅限你**拥有访问权限**的内容。
+- **DRM 保护**（Widevine / FairPlay）：密钥在加密黑盒中，正路无法下载，界面会明确提示。
+- **纯 JS 渲染的文章页**：正文不在原始 HTML 中时可能提取失败（提示未识别到正文）。
+- 部分境外站点（YouTube、SoundCloud 等）在你所在网络环境下可能无法连接，属网络问题。
+
+## 常见问题
+
+**Q：杀毒软件拦截 exe？**
+A：PyInstaller 打包程序的常见误报，非病毒。请在 Windows 安全中心 → 病毒和威胁防护 → 排除项中添加软件所在文件夹。
+
+**Q：支持哪些音乐网站？**
+A：网易云音乐、QQ音乐、SoundCloud、Bandcamp、Jamendo、YandexMusic 等（yt-dlp 原生提取器）。
+
+**Q：下载失败显示 ERR_UNSUPPORTED？**
+A：站点可能改版导致解析器失效（上游修复中），或确实不支持；可尝试粘贴视频/音频直链。
 
 ## 开源致谢
 
