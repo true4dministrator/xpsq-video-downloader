@@ -22,25 +22,30 @@ ProgressCb = Callable[[dict], None]
 
 
 def _build_ydl_opts(cfg: dict, save_dir: str, progress_cb: ProgressCb, task_logger: TaskLogger,
-                    cancel_flag: Callable[[], bool] | None = None) -> dict:
+                    cancel_flag: Callable[[], bool] | None = None,
+                    audio_only: bool = False) -> dict:
     net = cfg.get("network", {})
     dl = cfg.get("download", {})
     ck = cfg.get("cookies", {})
 
-    quality = dl.get("default_quality", "best")
-    fmt = dl.get("default_format", "mp4")
-    fmt_sel = "bestvideo*+bestaudio/best"
-    if quality == "1080":
-        fmt_sel = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
-    elif quality == "720":
-        fmt_sel = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
-    if fmt == "mp4":
-        fmt_sel += "/bestvideo*+bestaudio/best"
+    if audio_only:
+        fmt_sel = "bestaudio/best"
+    else:
+        quality = dl.get("default_quality", "best")
+        fmt = dl.get("default_format", "mp4")
+        fmt_sel = "bestvideo*+bestaudio/best"
+        if quality == "1080":
+            fmt_sel = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+        elif quality == "720":
+            fmt_sel = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+        if fmt == "mp4":
+            fmt_sel += "/bestvideo*+bestaudio/best"
 
     opts: dict = {
         "outtmpl": str(Path(save_dir) / dl.get("filename_template", "%(title)s.%(ext)s")),
         "format": fmt_sel,
-        "merge_output_format": "mp4" if fmt == "mp4" else "mkv" if fmt == "mkv" else None,
+        "merge_output_format": None if audio_only else (
+            "mp4" if fmt == "mp4" else "mkv" if fmt == "mkv" else None),
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
@@ -80,6 +85,8 @@ def _build_ydl_opts(cfg: dict, save_dir: str, progress_cb: ProgressCb, task_logg
         opts["writethumbnail"] = True
     if dl.get("sponsorblock"):
         opts["sponsorblock"] = {"remove": ["sponsor", "selfpromo"]}
+    # 注意：音频提取不用 yt-dlp 的 FFmpegExtractAudio（它需要 ffprobe），
+    # 由 download() 在下载完成后自行用 ffmpeg 转 MP3
     return opts
 
 
@@ -136,17 +143,18 @@ class VideoDownloader:
             self.progress_cb({"event": "postprocessing",
                               "postprocessor": d.get("postprocessor", "")})
 
-    def download(self, url: str, save_dir: str) -> TaskResult:
+    def download(self, url: str, save_dir: str, audio_only: bool = False) -> TaskResult:
         import yt_dlp
         task_id = new_task_id()
         result = TaskResult(mode="video", task_id=task_id, url=url, env=version.APP_NAME_EN)
         logger = TaskLogger(task_id)
         result.log_file = logger.file
-        logger.log("video_start", {"url": url, "save_dir": save_dir})
+        logger.log("video_start", {"url": url, "save_dir": save_dir, "audio_only": audio_only})
         try:
             self._started = time.time()
             self._downloaded = 0.0
-            opts = _build_ydl_opts(self.cfg, save_dir, self._hook, logger, self.cancel_flag)
+            opts = _build_ydl_opts(self.cfg, save_dir, self._hook, logger, self.cancel_flag,
+                                   audio_only=audio_only)
             if not find_ffmpeg():
                 opts["nopart"] = False  # 无 ffmpeg 时单文件流可直接下载
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -157,7 +165,17 @@ class VideoDownloader:
                 filename = ydl.prepare_filename(info)
                 final = info.get("_filename") or filename
                 path = final if os.path.exists(final) else (
-                    _find_actual_file(save_dir, info.get("id"), info.get("title")))
+                    _find_actual_file(save_dir, info.get("id"), info.get("title"), audio_only))
+                # 音频模式：下载完音频流后自行转 MP3（不依赖 ffprobe）
+                if audio_only and path:
+                    self.progress_cb({"event": "postprocessing",
+                                      "postprocessor": "提取音频", "note": "正在转换为 MP3…"})
+                    mp3_path = _extract_audio_mp3(path)
+                    if mp3_path:
+                        path = mp3_path
+                    else:
+                        raise AppError(ERR_FFMPEG, "音频提取失败")
+                ext = Path(path).suffix.lstrip(".") if path else ("mp3" if audio_only else "")
                 result.mark_success(
                     title=info.get("title") or info.get("id") or "",
                     extractor=str(info.get("extractor") or info.get("extractor_key") or ""),
@@ -166,8 +184,9 @@ class VideoDownloader:
                     size_bytes=os.path.getsize(path) if path and os.path.exists(path) else int(
                         self._downloaded),
                     duration=_fmt_duration(info.get("duration")),
-                    resolution=_fmt_resolution(info.get("width"), info.get("height"), info.get("resolution")),
-                    media_format=str(info.get("ext") or (Path(path).suffix.lstrip(".") if path else "")),
+                    resolution="" if audio_only else _fmt_resolution(
+                        info.get("width"), info.get("height"), info.get("resolution")),
+                    media_format=ext,
                     segments=_count_segments(info),
                     avg_speed=_avg_speed(self._downloaded, time.time() - self._started),
                     elapsed_s=time.time() - self._started,
@@ -187,11 +206,42 @@ class VideoDownloader:
             logger.close()
 
 
-def _find_actual_file(save_dir: str, video_id: str | None, title: str | None) -> str:
+def _extract_audio_mp3(src: str) -> str | None:
+    """用 ffmpeg 把音频文件转成 MP3（VBR 最高质量），成功后删除中间文件。"""
+    ff = find_ffmpeg()
+    if not ff:
+        raise AppError(ERR_FFMPEG, "需要 ffmpeg 提取音频")
+    dst = Path(src).with_suffix(".mp3")
+    cmd = [ff, "-y", "-i", src, "-vn", "-c:a", "libmp3lame", "-q:a", "0", str(dst)]
+    kwargs: dict = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, **kwargs)
+    except Exception as exc:
+        raise AppError(ERR_FFMPEG, f"音频提取失败: {exc}") from exc
+    if proc.returncode != 0 or not dst.exists():
+        try:
+            dst.unlink(missing_ok=True)
+        except Exception:
+            pass
+        err_tail = (proc.stderr or "")[-200:]
+        raise AppError(ERR_FFMPEG, f"音频提取失败: {err_tail}")
+    try:
+        os.remove(src)
+    except Exception:
+        pass
+    return str(dst)
+
+
+def _find_actual_file(save_dir: str, video_id: str | None, title: str | None,
+                      audio_only: bool = False) -> str:
+    try:
+        exts = (".mp3", ".m4a", ".opus", ".ogg", ".wav", ".aac") if audio_only else \
+               (".mp4", ".mkv", ".webm", ".flv", ".mov", ".mp3", ".m4a")
         files = list(Path(save_dir).iterdir())
         for f in files:
-            if f.is_file() and f.suffix.lower() in (".mp4", ".mkv", ".webm", ".flv", ".mov"):
+            if f.is_file() and f.suffix.lower() in exts:
                 if title and title[:20] in f.name:
                     return str(f)
         return ""
@@ -235,7 +285,7 @@ def _avg_speed(bytes_done: float, seconds: float) -> str:
 # ---------------- 万能兜底嗅探器 ----------------
 
 _MEDIA_RE = re.compile(
-    r'https?://[^\s"\'<>\\]+?\.(?:mp4|webm|m4v|mov|flv|ts)(?:\?[^\s"\'<>\\]*)?', re.I)
+    r'https?://[^\s"\'<>\\]+?\.(?:mp4|webm|m4v|mov|flv|ts|mp3|m4a|aac|ogg|opus)(?:\?[^\s"\'<>\\]*)?', re.I)
 _M3U8_RE = re.compile(
     r'https?://[^\s"\'<>\\]+?\.m3u8(?:\?[^\s"\'<>\\]*)?', re.I)
 _BLOB_RE = re.compile(r'blob:https?://[^\s"\'<>]+', re.I)

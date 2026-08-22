@@ -217,24 +217,30 @@ class VideoPanel(_BasePanel):
         self.q_combo.addItems(["最佳画质", "1080p", "720p"])
         self.fmt_combo = QComboBox()
         self.fmt_combo.addItems(["mp4", "mkv", "原始格式"])
+        self.audio_check = QCheckBox("仅音频 (MP3)")
+        self.audio_check.setChecked(bool(dl.get("audio_only", False)))
         self.sb_check = QCheckBox("跳过赞助段落 (SponsorBlock)")
         self.sub_check = QCheckBox("下载字幕")
         for w in (QLabel("画质"), self.q_combo, QLabel("格式"), self.fmt_combo,
-                  self.sb_check, self.sub_check):
+                  self.audio_check, self.sb_check, self.sub_check):
             self.opt_lay.addWidget(w)
         self.opt_lay.addStretch()
+        self.audio_check.toggled.connect(
+            lambda on: self.q_combo.setEnabled(not on))
 
     def _make_worker(self, url: str, save_dir: str):
         q = self.q_combo.currentIndex()
         quality = ("best", "1080", "720")[q]
         fmt = self.fmt_combo.currentText()
         fmt = "best" if fmt == "原始格式" else fmt
+        audio_only = self.audio_check.isChecked()
         self.cfg.setdefault("download", {})["default_quality"] = quality
         self.cfg["download"]["default_format"] = fmt
+        self.cfg["download"]["audio_only"] = audio_only
         self.cfg["download"]["sponsorblock"] = self.sb_check.isChecked()
         self.cfg["download"]["subtitles"] = self.sub_check.isChecked()
         save_config(self.cfg)
-        return VideoWorker(url, save_dir, self.cfg)
+        return VideoWorker(url, save_dir, self.cfg, audio_only=audio_only)
 
 
 class ArticlePanel(_BasePanel):

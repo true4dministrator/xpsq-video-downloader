@@ -30,6 +30,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "default_quality": "best",        # best / 1080 / 720
         "default_format": "mp4",          # mp4 / mkv / best
         "filename_template": "%(title)s.%(ext)s",
+        "audio_only": False,              # True = 仅提取音频 MP3
         "subtitles": False,
         "thumbnail": False,
         "sponsorblock": False,

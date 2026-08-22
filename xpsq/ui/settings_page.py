@@ -187,6 +187,9 @@ class SettingsPage(QWidget):
         self.cb_fmt.addItems(["mp4", "mkv", "原始格式"])
         self.cb_fmt.setCurrentText({"mp4": "mp4", "mkv": "mkv"}.get(dl.get("default_format", "mp4"), "原始格式"))
         self._row(form, "默认封装", self.cb_fmt)
+        self.cb_audio = QCheckBox("默认仅音频（MP3）")
+        self.cb_audio.setChecked(bool(dl.get("audio_only", False)))
+        self._row(form, "音频模式", self.cb_audio, "勾选后下载时只提取音频，保存为 MP3")
         self.cb_sb = QCheckBox("跳过赞助段落 (SponsorBlock)")
         self.cb_sb.setChecked(bool(dl.get("sponsorblock", False)))
         self._row(form, "SponsorBlock", self.cb_sb, "仅部分站点支持，自动剪掉视频内赞助片段")
@@ -344,6 +347,7 @@ class SettingsPage(QWidget):
         d["default_dir"] = self.ed_dir.text().strip()
         d["default_quality"] = ("best", "1080", "720")[self.cb_quality.currentIndex()]
         d["default_format"] = ("mp4", "mkv", "best")[self.cb_fmt.currentIndex()]
+        d["audio_only"] = self.cb_audio.isChecked()
         d["sponsorblock"] = self.cb_sb.isChecked()
         d["subtitles"] = self.cb_sub.isChecked()
 
