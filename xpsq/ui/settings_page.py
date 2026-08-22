@@ -30,8 +30,11 @@ class SettingsPage(QWidget):
         self._build()
 
     def _build(self) -> None:
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 18)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 18, 20, 18)
+        outer.setSpacing(10)
+
+        lay = QHBoxLayout()
 
         # 左：分类
         self.cat_list = QListWidget()
@@ -55,7 +58,40 @@ class SettingsPage(QWidget):
             self.stack.addWidget(self._pages[name])
         lay.addWidget(self.stack, 1)
 
+        outer.addLayout(lay, 1)
+
+        # 底部操作栏
+        btn_row = QHBoxLayout()
+        b_reset = QPushButton("恢复默认")
+        b_reset.clicked.connect(self._reset_defaults)
+        b_save = QPushButton("保存设置")
+        b_save.setObjectName("primary")
+        b_save.clicked.connect(lambda: self.save())
+        btn_row.addWidget(b_reset)
+        btn_row.addStretch()
+        btn_row.addWidget(b_save)
+        outer.addLayout(btn_row)
+
+        # 主题切换即时生效
+        self.cb_theme.currentIndexChanged.connect(lambda _: self.save())
+
         self.cat_list.setCurrentRow(0)
+
+    def _reset_defaults(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        from ..config import DEFAULT_CONFIG, CONFIG_FILE
+        try:
+            CONFIG_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+        self.cfg = dict(DEFAULT_CONFIG)
+        save_config(self.cfg)
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, DEFAULT_CONFIG["general"]["theme"])
+        win = self.window()
+        if win is not None and hasattr(win, "rebuild_theme"):
+            win.rebuild_theme()
 
     def _scrolled(self, widget: QWidget) -> QWidget:
         scroll = QScrollArea()
@@ -228,7 +264,7 @@ class SettingsPage(QWidget):
 
         sub = QLabel("视频下载 · 文章提取 · 双模式桌面工具")
         sub.setAlignment(Qt.AlignCenter)
-        sub.setStyleSheet("color:#888;font-size:12px;")
+        sub.setStyleSheet(f"color:{C['muted']};font-size:12px;")
         v.addWidget(sub)
         v.addSpacing(14)
 

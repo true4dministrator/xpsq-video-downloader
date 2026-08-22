@@ -66,7 +66,7 @@ DARK_COLORS = {
     "sidebar_title": "#e6e8ea",
 }
 
-C: dict = LIGHT_COLORS  # 当前生效色板，apply_theme 时更新
+C: dict = dict(LIGHT_COLORS)  # 当前生效色板（独立副本，apply_theme 时原地更新）
 
 
 def build_palette(dark: bool) -> QPalette:
@@ -210,7 +210,10 @@ def resolve_dark(theme: str) -> bool:
 def apply_theme(app, theme: str) -> None:
     global C
     dark = resolve_dark(theme)
-    C = DARK_COLORS if dark else LIGHT_COLORS
+    # 原地更新 C，而不是重新绑定：所有 `from .theme import C` 的模块引用都会同步看到新值
+    new_colors = DARK_COLORS if dark else LIGHT_COLORS
+    C.clear()
+    C.update(new_colors)
     app.setStyle("Fusion")
     app.setPalette(build_palette(dark))
     app.setStyleSheet(build_qss(C))

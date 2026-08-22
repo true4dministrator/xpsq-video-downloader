@@ -43,16 +43,11 @@ class MainWindow(QMainWindow):
         lay.setSpacing(10)
 
         # 左侧栏
-        sidebar = QWidget()
-        sidebar.setFixedWidth(140)
-        sidebar.setStyleSheet(
-            f"QWidget#sidebar{{background:{C['sidebar_bg']};border-radius:12px;}}"
-            "QListWidget{border:none;background:transparent;font-size:13px;outline:0;}"
-            "QListWidget::item{padding:10px 12px;border-radius:8px;margin:2px 6px;}"
-            f"QListWidget::item:selected{{background:{C['selected_bg']};color:{C['selected_text']};font-weight:600;}}"
-            f"QListWidget::item:hover{{background:{C['hover']};}}")
-        sidebar.setObjectName("sidebar")
-        sl = QVBoxLayout(sidebar)
+        self.sidebar = QWidget()
+        self.sidebar.setFixedWidth(140)
+        self.sidebar.setObjectName("sidebar")
+        self._style_sidebar()
+        sl = QVBoxLayout(self.sidebar)
         sl.setContentsMargins(0, 12, 0, 12)
 
         title = QLabel(APP_NAME)
@@ -69,7 +64,7 @@ class MainWindow(QMainWindow):
         ver.setStyleSheet(f"color:{C['faint']};font-size:11px;padding:4px 16px;")
         sl.addWidget(ver)
 
-        lay.addWidget(sidebar)
+        lay.addWidget(self.sidebar)
 
         # 主区域
         self.stack = QStackedWidget()
@@ -81,6 +76,15 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.stack, 1)
 
         self.nav.currentRowChanged.connect(lambda i: self.stack.setCurrentIndex(i))
+
+    def _style_sidebar(self) -> None:
+        """按当前主题色板刷新侧栏样式（切换主题时调用）。"""
+        self.sidebar.setStyleSheet(
+            f"QWidget#sidebar{{background:{C['sidebar_bg']};border-radius:12px;}}"
+            "QListWidget{border:none;background:transparent;font-size:13px;outline:0;}"
+            "QListWidget::item{padding:10px 12px;border-radius:8px;margin:2px 6px;}"
+            f"QListWidget::item:selected{{background:{C['selected_bg']};color:{C['selected_text']};font-weight:600;}}"
+            f"QListWidget::item:hover{{background:{C['hover']};}}")
 
     def rebuild_theme(self) -> None:
         """主题切换后重建主界面，保留输入框内容与当前页面。"""
@@ -102,6 +106,7 @@ class MainWindow(QMainWindow):
         self.video_panel.dir_edit.setText(saved["video"][1])
         self.article_panel.url_edit.setText(saved["article"][0])
         self.article_panel.dir_edit.setText(saved["article"][1])
+        self._style_sidebar()
         if 0 <= idx < self.stack.count():
             self.stack.setCurrentIndex(idx)
 
