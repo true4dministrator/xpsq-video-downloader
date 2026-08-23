@@ -1,6 +1,7 @@
 """视频下载内核：yt-dlp 主引擎 + 万能兜底嗅探器。"""
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -8,8 +9,10 @@ import threading
 import time
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urljoin
 
 import requests
+from lxml import html as lhtml
 
 from .. import version
 from ..config import load_config
@@ -298,7 +301,7 @@ def _avg_speed(bytes_done: float, seconds: float) -> str:
     return _human_speed(bytes_done / seconds)
 
 
-# ---------------- 万能兜底嗅探器 ----------------
+# ---------------- 万能兜底嗅探器（四层强化版） ----------------
 
 _MEDIA_RE = re.compile(
     r'https?://[^\s"\'<>\\]+?\.(?:mp4|webm|m4v|mov|flv|ts|mp3|m4a|aac|ogg|opus)(?:\?[^\s"\'<>\\]*)?', re.I)
@@ -306,18 +309,136 @@ _M3U8_RE = re.compile(
     r'https?://[^\s"\'<>\\]+?\.m3u8(?:\?[^\s"\'<>\\]*)?', re.I)
 _BLOB_RE = re.compile(r'blob:https?://[^\s"\'<>]+', re.I)
 
+# L1 内嵌 JSON 状态窗口变量（React/Nuxt/Next 等前端框架的通用约定）
+_STATE_PATTERNS = [
+    re.compile(r'window\.__INITIAL_STATE__\s*=\s*', re.I),
+    re.compile(r'window\.__NUXT__\s*=\s*', re.I),
+    re.compile(r'window\.__NEXT_DATA__\s*=\s*', re.I),
+    re.compile(r'window\.__INITIAL_DATA__\s*=\s*', re.I),
+    re.compile(r'window\.__PRELOADED_STATE__\s*=\s*', re.I),
+    re.compile(r'window\.__APOLLO_STATE__\s*=\s*', re.I),
+    re.compile(r'__INITIAL_STATE__\s*[:=]\s*', re.I),
+]
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 
+def _balanced_json(text: str, start: int) -> str | None:
+    """从 text[start]（应为 { 或 [）开始做括号配对扫描，返回完整 JSON 片段。"""
+    if start >= len(text):
+        return None
+    open_ch = text[start]
+    close_ch = '}' if open_ch == '{' else ']' if open_ch == '[' else None
+    if close_ch is None:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    i = start
+    while i < len(text):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == '\\':
+                esc = True
+            elif c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c == open_ch:
+                depth += 1
+            elif c == close_ch:
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+        i += 1
+    return None
+
+
+def _walk_media(obj, out: list) -> None:
+    """递归遍历 JSON 结构，收集看起来像媒体直链的字符串。"""
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _walk_media(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _walk_media(v, out)
+    elif isinstance(obj, str):
+        if _M3U8_RE.search(obj) or _MEDIA_RE.search(obj):
+            out.append(obj)
+
+
+def _collect_ld_video(obj, out: list) -> None:
+    """递归遍历 JSON-LD，收集 VideoObject 的 contentUrl/embedUrl/url。"""
+    if isinstance(obj, dict):
+        t = str(obj.get('@type') or '')
+        if 'VideoObject' in t or 'MusicVideoObject' in t:
+            for k in ('contentUrl', 'embedUrl', 'url'):
+                u = obj.get(k)
+                if isinstance(u, str) and u:
+                    out.append(u)
+            v = obj.get('video')
+            if isinstance(v, (dict, list)):
+                _collect_ld_video(v, out)
+        for val in obj.values():
+            if isinstance(val, (dict, list)):
+                _collect_ld_video(val, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _collect_ld_video(v, out)
+
+
+def _pick_srcset(srcset: str, base_url: str) -> str | None:
+    """从 srcset 里挑分辨率标记最高（xxxw）的那个 URL。"""
+    best_url, best_w = None, -1
+    for part in srcset.split(','):
+        toks = [t for t in part.strip().split() if t]
+        if not toks:
+            continue
+        w = -1
+        if len(toks) > 1:
+            m = re.search(r'(\d+)w', toks[1])
+            if m:
+                w = int(m.group(1))
+        if w > best_w:
+            best_w, best_url = w, toks[0]
+    return urljoin(base_url, best_url) if best_url else None
+
+
+def _parse_master_streams(text: str, base_url: str) -> list[tuple[int, str]]:
+    """解析 master 级 m3u8，返回 [(BANDWIDTH, 子流 URL), ...]。"""
+    streams: list[tuple[int, str]] = []
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line.startswith('#EXT-X-STREAM-INF'):
+            continue
+        bw = 0
+        m = re.search(r'BANDWIDTH=(\d+)', line)
+        if m:
+            bw = int(m.group(1))
+        if i + 1 < len(lines):
+            uri = lines[i + 1].strip()
+            if uri and not uri.startswith('#'):
+                streams.append((bw, urljoin(base_url, uri)))
+    return streams
+
+
 class FallbackSniffer:
-    """yt-dlp 不支持时：从页面 HTML/JS 中嗅探直链。"""
+    """yt-dlp 不支持时：四层流水线嗅探直链。
+
+    L0 语义提取(video/og/JSON-LD) → L1 内嵌 JSON 状态 → L2 m3u8 智能解析 → L3 递归(iframe/JS)
+    """
 
     def __init__(self, cfg: dict | None = None, progress_cb: ProgressCb | None = None,
                  cancel_flag: Callable[[], bool] | None = None):
         self.cfg = cfg or load_config()
         self.progress_cb = progress_cb or (lambda d: None)
         self.cancel_flag = cancel_flag
+        self.diag: dict = {}
         self._session = requests.Session()
         self._session.headers.update({
             "User-Agent": UA,
@@ -328,29 +449,210 @@ class FallbackSniffer:
         if ck and Path(ck).exists():
             self._session.cookies = _load_cookies_file(ck)
 
-    def sniff(self, url: str) -> tuple[str | None, str]:
-        """返回 (直链, 类型)，类型为 mp4/m3u8/blob/None。支持相对路径 urljoin。"""
-        from urllib.parse import urljoin
+    # ---------- 网络 ----------
+    def _fetch(self, url: str, referer: str | None = None, timeout: int = 20) -> requests.Response:
+        proxy = self.cfg.get("network", {}).get("proxy") or None
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        return self._session.get(url, timeout=timeout, allow_redirects=True,
+                                 headers={"Referer": referer or url}, proxies=proxies)
+
+    # ---------- L0 语义提取 ----------
+    def _extract_l0(self, html: str, base_url: str) -> list[str]:
+        """优先级：JSON-LD > og:video/twitter > video/source 标签 > srcset。"""
+        hits: list[tuple[int, str]] = []
         try:
-            proxy = self.cfg.get("network", {}).get("proxy") or None
-            resp = self._session.get(url, timeout=20, allow_redirects=True,
-                                     headers={"Referer": url}, proxies={"http": proxy, "https": proxy} if proxy else None)
-            html = resp.text
-            for m in _M3U8_RE.findall(html):
-                return m, "m3u8"
-            cands = _MEDIA_RE.findall(html)
-            if cands:
-                return cands[0], "mp4"
-            # 相对路径兜底：src/href="xxx.mp4"、src/href='xxx.mp4'
-            rel = re.findall(
-                r'''(?:src|href|data-src)\s*=\s*["']([^"']+\.(?:mp4|webm|m4v|mov|flv|ts|mp3|m4a|aac|ogg|opus)(?:\?[^"']*)?)["']''',
-                html, re.I)
-            if rel:
-                return urljoin(url, rel[0]), "mp4"
-            if _BLOB_RE.search(html):
-                return None, "blob"
-            return None, None
+            doc = lhtml.fromstring(html)
         except Exception:
+            doc = None
+        if doc is not None:
+            for node in doc.xpath('//script[@type="application/ld+json"]'):
+                txt = (node.text or '').strip()
+                if not txt:
+                    continue
+                try:
+                    data = json.loads(txt)
+                except Exception:
+                    continue
+                found: list[str] = []
+                _collect_ld_video(data, found)
+                for u in found:
+                    hits.append((0, u))
+            for meta in doc.xpath('//meta'):
+                prop = (meta.get('property') or meta.get('name') or '').lower()
+                if prop in ('og:video', 'og:video:url', 'og:video:secure_url',
+                            'twitter:player', 'twitter:player:stream',
+                            'twitter:player:url'):
+                    content = (meta.get('content') or '').strip()
+                    if content and content not in ('video/mp4', 'video/webm', 'video/ogg'):
+                        hits.append((1, content))
+            for v in doc.xpath('//video/@src | //video/source/@src | //source/@src'):
+                if v.strip():
+                    hits.append((2, v.strip()))
+            for v in doc.xpath('//video/@srcset | //video/source/@srcset | //source/@srcset'):
+                best = _pick_srcset(v, base_url)
+                if best:
+                    hits.append((2, best))
+        seen: set[str] = set()
+        out: list[str] = []
+        for pri, u in sorted(hits, key=lambda x: x[0]):
+            fu = urljoin(base_url, u.strip())
+            if fu in seen or not fu.startswith(('http://', 'https://')):
+                continue
+            seen.add(fu)
+            # 高优先级来源(JSON-LD/og)即使无扩展名也接受（CDN 常见）
+            if pri <= 1 or _M3U8_RE.search(fu) or _MEDIA_RE.search(fu):
+                out.append(fu)
+        return out
+
+    # ---------- L1 内嵌 JSON 状态挖掘 ----------
+    def _extract_l1(self, html: str) -> list[str]:
+        out: list[str] = []
+        for pat in _STATE_PATTERNS:
+            for m in pat.finditer(html):
+                s = m.end()
+                while s < len(html) and html[s] in ' \t\r\n':
+                    s += 1
+                if s >= len(html) or html[s] not in '{[':
+                    continue
+                seg = _balanced_json(html, s)
+                if not seg:
+                    continue
+                try:
+                    data = json.loads(seg)
+                except Exception:
+                    continue
+                _walk_media(data, out)
+        return list(dict.fromkeys(out))
+
+    # ---------- L2 m3u8 智能解析 ----------
+    def _resolve_m3u8(self, url: str, referer: str, depth: int = 0) -> str:
+        """master 级播放列表自动选最高码率子流，最多递归 3 层。"""
+        if depth >= 3:
+            return url
+        try:
+            resp = self._fetch(url, referer=referer)
+            text = resp.text
+        except Exception:
+            return url
+        if '#EXT-X-STREAM-INF' in text:
+            streams = _parse_master_streams(text, url)
+            if streams:
+                best = max(streams, key=lambda s: s[0])
+                self.progress_cb({"event": "sniffing",
+                                  "note": f"m3u8 多码率流，自动选择 {best[0] // 1000}kbps…"})
+                return self._resolve_m3u8(best[1], referer, depth + 1)
+        return url
+
+    # ---------- L3 递归扫描（iframe + JS 资源） ----------
+    def _extract_l3(self, page_url: str, html: str, visited: set[str],
+                    depth: int, max_depth: int = 2) -> tuple[str | None, str]:
+        if depth >= max_depth:
+            return None, None
+        try:
+            doc = lhtml.fromstring(html)
+            frames = [f for f in doc.xpath('//iframe/@src | //frame/@src') if f.strip()][:6]
+            js_urls = [j for j in doc.xpath('//script/@src') if j.strip()][:6]
+        except Exception:
+            frames, js_urls = [], []
+        for f in frames:
+            fu = urljoin(page_url, f.strip())
+            if not fu.startswith(('http://', 'https://')) or fu in visited:
+                continue
+            visited.add(fu)
+            self.progress_cb({"event": "sniffing",
+                              "note": f"发现内嵌播放器，深入解析 {fu[:40]}…"})
+            try:
+                resp = self._fetch(fu, referer=page_url)
+                media, kind = self._sniff_content(fu, resp.text, visited, depth + 1)
+                if media:
+                    return media, kind
+            except Exception:
+                continue
+        for j in js_urls:
+            ju = urljoin(page_url, j.strip())
+            if not ju.startswith(('http://', 'https://')) or ju in visited:
+                continue
+            visited.add(ju)
+            try:
+                resp = self._fetch(ju, referer=page_url, timeout=15)
+                js = resp.text
+                for m in _M3U8_RE.findall(js):
+                    return m, 'm3u8'
+                cands = _MEDIA_RE.findall(js)
+                if cands:
+                    return cands[0], 'mp4'
+            except Exception:
+                continue
+        return None, None
+
+    # ---------- 单页内容嗅探（L0/L1/正则 + 递归 L3） ----------
+    def _sniff_content(self, page_url: str, html: str, visited: set[str],
+                       depth: int = 0) -> tuple[str | None, str]:
+        # 页面本身就是 m3u8 master 播放列表：直接用页面 URL 选最高码率
+        if html.lstrip().startswith('#EXTM3U') and '#EXT-X-STREAM-INF' in html:
+            return self._resolve_m3u8(page_url, page_url), 'm3u8'
+        # 正则快速通道（m3u8 优先，兼容旧行为）
+        for m in _M3U8_RE.findall(html):
+            return self._resolve_m3u8(m, page_url), 'm3u8'
+        for m in _MEDIA_RE.findall(html):
+            return m, 'mp4'
+        # L0 语义提取
+        self.progress_cb({"event": "sniffing", "note": "语义解析页面结构…"})
+        for u in self._extract_l0(html, page_url):
+            if _M3U8_RE.search(u):
+                return self._resolve_m3u8(u, page_url), 'm3u8'
+            return u, 'mp4'
+        # 相对路径兜底（src/href="xxx.mp4"）
+        rel = re.findall(
+            r'''(?:src|href|data-src)\s*=\s*["']([^"']+\.(?:mp4|webm|m4v|mov|flv|ts|mp3|m4a|aac|ogg|opus)(?:\?[^"']*)?)["']''',
+            html, re.I)
+        if rel:
+            return urljoin(page_url, rel[0]), 'mp4'
+        # L1 内嵌 JSON 状态
+        self.progress_cb({"event": "sniffing", "note": "挖掘页面内嵌数据…"})
+        for u in self._extract_l1(html):
+            if _M3U8_RE.search(u):
+                return self._resolve_m3u8(u, page_url), 'm3u8'
+            if _MEDIA_RE.search(u):
+                return u, 'mp4'
+        if _BLOB_RE.search(html):
+            return None, 'blob'
+        # L3 递归（iframe + JS 资源）
+        if depth < 2:
+            media, kind = self._extract_l3(page_url, html, visited, depth)
+            if media:
+                return media, kind
+        return None, None
+
+    # ---------- 入口 ----------
+    def sniff(self, url: str) -> tuple[str | None, str]:
+        """四层流水线嗅探，返回 (直链, 类型)。诊断信息存 self.diag。"""
+        self.diag = {}
+        try:
+            resp = self._fetch(url)
+            html = resp.text
+            self.diag = {
+                "status": resp.status_code,
+                "final_url": str(resp.url),
+                "html_len": len(html),
+                "content_type": resp.headers.get("content-type", ""),
+            }
+            # content-type 直判：响应本身就是媒体文件（直链 mp4/m3u8 等）
+            ct = self.diag["content_type"].lower()
+            if any(t in ct for t in ("video/", "audio/", "mpegurl")):
+                kind = "m3u8" if "mpegurl" in ct else "mp4"
+                self.progress_cb({"event": "sniffing", "note": f"识别到 {kind} 媒体直链…"})
+                return str(resp.url), kind
+            low = html.lower()
+            for kw in ("under construction", "we will be back soon", "attention required",
+                       "cf-challenge", "checking your browser"):
+                if kw in low:
+                    self.diag["page_state"] = kw
+                    break
+            self.progress_cb({"event": "sniffing", "note": "开始万能嗅探…"})
+            return self._sniff_content(url, html, set(), 0)
+        except Exception as exc:
+            self.diag["error"] = str(exc)[:200]
             return None, None
 
     def download(self, media_url: str, kind: str, save_dir: str, referer: str) -> TaskResult:
@@ -515,6 +817,18 @@ class FallbackSniffer:
                 popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 不弹控制台窗口
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, **popen_kwargs)
+            # 后台线程持续消费 stdout，避免 ffmpeg 进度输出写满 PIPE 缓冲区导致死锁
+            buf: list[str] = []
+
+            def _pump() -> None:
+                try:
+                    assert proc.stdout is not None
+                    for line in proc.stdout:
+                        buf.append(line)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_pump, daemon=True).start()
             started = time.time()
             while proc.poll() is None:
                 if self.cancel_flag and self.cancel_flag():
@@ -522,7 +836,8 @@ class FallbackSniffer:
                     raise AppError(ERR_CANCELLED, "用户取消")
                 time.sleep(0.3)
             if proc.returncode != 0:
-                raise AppError(ERR_NETWORK, "ffmpeg 下载失败")
+                err_tail = "".join(buf)[-300:]
+                raise AppError(ERR_NETWORK, f"ffmpeg 下载失败: {err_tail}")
         except AppError:
             raise
         except Exception as exc:

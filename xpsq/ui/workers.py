@@ -52,7 +52,19 @@ class VideoWorker(BaseWorker):
                     if kind == "blob":
                         result.friendly = "该页面视频以 blob 流播放，暂无法直接嗅探到直链"
                     else:
-                        result.friendly = "该网址暂不支持且嗅探未找到直链，请反馈给开发者"
+                        diag = getattr(sniffer, "diag", {}) or {}
+                        if diag.get("page_state"):
+                            result.friendly = (
+                                f"页面处于异常状态（{diag['page_state']}），"
+                                "视频数据未返回，请稍后重试或换浏览器打开确认")
+                        elif diag.get("html_len", 0) < 2000:
+                            result.friendly = (
+                                "页面返回内容过少（疑似纯 JS 渲染或占位页），"
+                                "静态嗅探找不到直链，该站点暂不支持")
+                        elif diag.get("error"):
+                            result.friendly = f"嗅探页面失败：{diag['error']}"
+                        else:
+                            result.friendly = "该网址暂不支持且嗅探未找到直链，请反馈给开发者"
             elif result.status == "failed" and self._cancel:
                 result.status = "cancelled"
                 result.error_code = ERR_CANCELLED
