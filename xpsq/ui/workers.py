@@ -59,8 +59,9 @@ class VideoWorker(BaseWorker):
                                 "视频数据未返回，请稍后重试或换浏览器打开确认")
                         elif diag.get("html_len", 0) < 2000:
                             result.friendly = (
-                                "页面返回内容过少（疑似纯 JS 渲染或占位页），"
-                                "静态嗅探找不到直链，该站点暂不支持")
+                                "该页面是纯 JS 渲染（内容由脚本动态加载），已尝试 API 接口探测仍未找到直链。"
+                                "自救方法：浏览器按 F12 → Network → 筛选 Media → 播放视频，"
+                                "把出现的 mp4/m3u8 链接复制粘贴回来即可下载")
                         elif diag.get("error"):
                             result.friendly = f"嗅探页面失败：{diag['error']}"
                         else:

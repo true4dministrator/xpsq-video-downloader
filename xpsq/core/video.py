@@ -585,7 +585,78 @@ class FallbackSniffer:
                 continue
         return None, None
 
-    # ---------- 单页内容嗅探（L0/L1/正则 + 递归 L3） ----------
+    # ---------- L4 SPA API 接口探测（JS 壳页面专用） ----------
+    _API_EP_RE = [
+        re.compile(r'["\'](/[^"\']*?(?:api|play|video|media|stream|vod)[^"\']*)["\']', re.I),
+        re.compile(r'(?:fetch|axios\.(?:get|post|put))\s*\(\s*["\']([^"\']+)["\']', re.I),
+        re.compile(r'(?:url|endpoint|apiUrl)\s*:\s*["\']([^"\']*?(?:api|play|video|stream)[^"\']*)["\']', re.I),
+    ]
+
+    def _extract_l4_api(self, page_url: str, visited: set[str],
+                        referer: str) -> tuple[str | None, str]:
+        """从页面 JS 中挖 API 端点并请求，递归挖媒体直链。限同域。"""
+        from urllib.parse import urlparse
+        host = urlparse(page_url).netloc
+        try:
+            resp = self._fetch(page_url, referer=referer)
+            html = resp.text
+            doc = lhtml.fromstring(html)
+            js_urls = [j for j in doc.xpath('//script/@src') if j.strip()][:4]
+        except Exception:
+            js_urls = []
+        self.progress_cb({"event": "sniffing", "note": "页面疑似 JS 渲染，探测后端 API 接口…"})
+        endpoints: list[str] = []
+        for j in js_urls:
+            ju = urljoin(page_url, j.strip())
+            if not ju.startswith(('http://', 'https://')) or ju in visited:
+                continue
+            visited.add(ju)
+            try:
+                js_text = self._fetch(ju, referer=referer, timeout=15).text
+            except Exception:
+                continue
+            for pat in self._API_EP_RE:
+                for m in pat.findall(js_text):
+                    ep = m.strip()
+                    if not ep or len(ep) < 5 or ep.startswith(('//', '#')):
+                        continue
+                    fu = urljoin(page_url, ep)
+                    if urlparse(fu).netloc != host:  # 只探测同域 API
+                        continue
+                    if fu not in endpoints:
+                        endpoints.append(fu)
+        for ep in endpoints[:8]:
+            if ep in visited:
+                continue
+            visited.add(ep)
+            try:
+                ar = self._fetch(ep, referer=referer, timeout=15)
+                body = ar.text
+            except Exception:
+                continue
+            if ar.status_code >= 400 or len(body) < 8:
+                continue
+            # API 返回 JSON：递归挖媒体直链
+            if body.lstrip().startswith(('{', '[')):
+                try:
+                    data = json.loads(body)
+                    found: list[str] = []
+                    _walk_media(data, found)
+                    for u in found:
+                        if _M3U8_RE.search(u):
+                            return self._resolve_m3u8(u, page_url), 'm3u8'
+                        if _MEDIA_RE.search(u):
+                            return u, 'mp4'
+                except Exception:
+                    pass
+            # 兜底：文本正则
+            for m in _M3U8_RE.findall(body):
+                return self._resolve_m3u8(m, page_url), 'm3u8'
+            for m in _MEDIA_RE.findall(body):
+                return m, 'mp4'
+        return None, None
+
+    # ---------- 单页内容嗅探（L0/L1/正则 + 递归 L3 + API L4） ----------
     def _sniff_content(self, page_url: str, html: str, visited: set[str],
                        depth: int = 0) -> tuple[str | None, str]:
         # 页面本身就是 m3u8 master 播放列表：直接用页面 URL 选最高码率
@@ -620,6 +691,11 @@ class FallbackSniffer:
         # L3 递归（iframe + JS 资源）
         if depth < 2:
             media, kind = self._extract_l3(page_url, html, visited, depth)
+            if media:
+                return media, kind
+        # L4 SPA API 接口探测（页面内容少时，数据很可能在 API 里）
+        if depth == 0 and len(html) < 20000:
+            media, kind = self._extract_l4_api(page_url, set(), page_url)
             if media:
                 return media, kind
         return None, None

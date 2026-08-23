@@ -12,7 +12,7 @@
   1. 语义提取（video/og:video/JSON-LD/srcset）
   2. 内嵌 JSON 状态挖掘（`__INITIAL_STATE__` 等）
   3. m3u8 智能解析（master 多码率自动选最高）
-  4. iframe 递归 + JS 资源扫描
+  4. iframe 递归 + JS 资源扫描 + **SPA API 接口探测**（JS 壳页面从 JS 挖 API 端点拿直链）
 - 直链响应自动识别（content-type 判断），mp4 / m3u8 / 音频直链直接可下
 - 画质可选（最佳 / 1080p / 720p），封装可选（mp4 / mkv / 原始）
 - **直链多线程分块下载**（HTTP Range，类 IDM）：服务器支持断点续传且文件较大时自动按并发数并行加速
