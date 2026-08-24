@@ -148,7 +148,7 @@ class SettingsPage(QWidget):
         w, form = self._page()
         net = self.cfg.get("network", {})
         self.cb_imp = QComboBox()
-        self.cb_imp.addItems(["chrome", "edge", "safari", "off"])
+        self.cb_imp.addItems(["chrome", "edge", "firefox", "safari", "off"])
         self.cb_imp.setCurrentText(net.get("impersonate", "chrome"))
         self._row(form, "伪装目标", self.cb_imp, "模仿真实浏览器 TLS 指纹，绕过站点识别")
         self.sp_conc = QSpinBox()
