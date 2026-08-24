@@ -8,11 +8,15 @@
 
 ### 🎬 视频下载
 - 粘贴含视频的网页链接即下载，内核基于 **yt-dlp**（支持 1000+ 站点提取器）
-- 不支持的站点自动落到**万能兜底嗅探器**，四层流水线找直链：
+- **多任务下载中心**：右侧常驻任务栏，可连续添加多个链接，有界并行（默认 3 个同时下载、同站点限 2 防封），每个任务独立进度/取消
+- **播放列表/歌单整批下载**：B站收藏夹、YouTube 播放列表、网易云歌单一键全下
+- 不支持的站点自动落到**万能兜底嗅探器**，多层流水线找直链：
   1. 语义提取（video/og:video/JSON-LD/srcset）
   2. 内嵌 JSON 状态挖掘（`__INITIAL_STATE__` 等）
   3. m3u8 智能解析（master 多码率自动选最高）
   4. iframe 递归 + JS 资源扫描 + **SPA API 接口探测**（JS 壳页面从 JS 挖 API 端点拿直链）
+  5. **无头浏览器真渲染**（Edge/Chrome/Firefox，捕获网络直链，带已保存的登录会话）
+- **浏览器一键登录会话**：设置 → 浏览器会话 → 粘贴网址登录一次，之后风控站/JS 壳站真渲染自动带上你的登录态，无需手动导出 cookies
 - 直链响应自动识别（content-type 判断），mp4 / m3u8 / 音频直链直接可下
 - 画质可选（最佳 / 1080p / 720p），封装可选（mp4 / mkv / 原始）
 - **直链多线程分块下载**（HTTP Range，类 IDM）：服务器支持断点续传且文件较大时自动按并发数并行加速
@@ -30,8 +34,9 @@
 - 基于 trafilatura，自动剔除导航、广告、评论区噪声
 
 ### 🛡️ 反爬与隐私
-- TLS 指纹伪装（curl_cffi 模拟 Chrome/Edge/Safari）、Cloudflare 挑战自动绕过
+- TLS 指纹伪装（curl_cffi 模拟 Chrome/Edge/**Firefox**/Safari）、Cloudflare 挑战自动绕过
 - 请求限速、HTTP 代理、cookies.txt 导入（仅用于下载**你自己有权限**访问的内容）
+- 浏览器会话仅保存在本机（`%APPDATA%/XpsqDownloader/browser_state.json`），不上传
 - 页面广告自动剔除；不做 DRM 破解、不做付费墙绕过
 
 ### 🎨 体验
@@ -87,7 +92,7 @@ build.bat
 
 ## 已知限制
 
-- **Yandex 视频**：yt-dlp 上游提取器失效（Yandex 改版导致 `Unable to extract data_raw`，见 yt-dlp issues #15912 / #13653 / #16047），等待上游修复；如有直链可粘贴直链下载。
+- **Yandex 视频**：yt-dlp 上游提取器失效（Yandex 改版导致 `Unable to extract data_raw`，见 yt-dlp issues #15912 / #13653 / #16047）。可先到 设置 → 浏览器会话 登录一次，再用无头浏览器真渲染兜底；或粘贴直链下载。
 - **VIP / 付费歌曲**：需在设置中导入你自己的 cookies 才能下载，且仅限你**拥有访问权限**的内容。
 - **DRM 保护**（Widevine / FairPlay）：密钥在加密黑盒中，正路无法下载，界面会明确提示。
 - **纯 JS 渲染的文章页**：正文不在原始 HTML 中时可能提取失败（提示未识别到正文）。
