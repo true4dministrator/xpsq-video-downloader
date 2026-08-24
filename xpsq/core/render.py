@@ -27,6 +27,14 @@ render_last_error = ""  # 最近一次渲染失败的原因（诊断用）
 # 登录/渲染过程日志（供排障）
 _session_log: list[str] = []
 
+# 手动保存请求（UI 按钮触发，login_session 检测到立即保存）
+_save_requested = threading.Event()
+
+
+def request_save() -> None:
+    """用户点击"我已登录完成，保存会话"时调用，让后台登录流程立即保存。"""
+    _save_requested.set()
+
 
 def _slog(msg: str) -> None:
     """记录浏览器会话过程日志（内存 + 追加到 LOGS_DIR/browser_session.log）。"""
@@ -98,8 +106,13 @@ def login_session(target_url: str, state_path: str, engine: str = "msedge",
             done = threading.Event()
 
             def _all_closed() -> bool:
+                """页面是否全部关闭。关闭的 page 可能残留在 ctx.pages 列表里，
+                所以不能只看列表是否为空，要逐个判断 is_closed()。"""
                 try:
-                    return not ctx.pages
+                    pages = ctx.pages
+                    if not pages:
+                        return True
+                    return all(p.is_closed() for p in pages)
                 except Exception:
                     return True
 
@@ -131,9 +144,19 @@ def login_session(target_url: str, state_path: str, engine: str = "msedge",
                 _slog("goto 完成")
             except Exception as e:
                 _slog(f"goto 异常(继续等待关窗): {str(e)[:100]}")
-            done.wait(timeout=close_timeout_s)
-            _slog("检测到关窗/超时，保存会话")
+            _save_requested.clear()
+            # 等待：关窗自动保存 或 用户点"我已完成"手动保存 或 超时
+            deadline = time.time() + close_timeout_s
+            while not done.is_set() and not _save_requested.is_set():
+                if time.time() > deadline:
+                    break
+                time.sleep(0.3)
+            reason = ("手动保存请求" if _save_requested.is_set()
+                      else "检测到关窗/超时")
+            _slog(f"{reason}，保存会话")
+            time.sleep(0.5)  # 等 cookies 落定
             ctx.storage_state(path=state_path)
+            _save_requested.clear()
             _slog("会话已保存")
             try:
                 browser.close()

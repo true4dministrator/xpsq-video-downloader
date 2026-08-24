@@ -289,6 +289,9 @@ class SettingsPage(QWidget):
         self.lab_bs_state = QLabel("")
         b_login = QPushButton("登录并保存会话")
         b_login.setObjectName("primary")
+        b_save_manual = QPushButton("我已完成，保存会话")
+        b_save_manual.setEnabled(False)
+        b_save_manual.setToolTip("登录完关闭窗口后，若未自动保存，点这个立即保存")
 
         def state_domains() -> list[str]:
             """从 storage state 提取会话覆盖的站点域名（去重）。"""
@@ -361,18 +364,31 @@ class SettingsPage(QWidget):
             if not url.startswith(("http://", "https://")):
                 self.lab_bs_state.setText("请先输入以 http(s):// 开头的网站地址")
                 return
-            from ..core.render import login_session
+            from ..core.render import login_session, request_save
             engine = resolve_engine()
             self._login_running = True
+            b_save_manual.setEnabled(True)
             self.lab_bs_state.setText(
-                f"已弹出{engine}窗口，请在窗口中登录/访问目标站后关闭窗口（关闭即自动保存）…")
+                f"已弹出{engine}窗口，请在窗口中登录/访问目标站；"
+                "关闭窗口会自动保存，若未自动保存请点下方按钮手动保存…")
             # 后台线程执行，避免阻塞界面（登录窗口关闭前 UI 保持可操作）
             threading.Thread(target=lambda: (
                 self.login_done.emit(login_session(url, str(BROWSER_STATE), engine=engine))),
                 daemon=True).start()
 
+        def manual_save() -> None:
+            if not self._login_running:
+                self.lab_bs_state.setText("当前没有进行中的登录会话")
+                return
+            from ..core.render import request_save
+            request_save()
+            self.lab_bs_state.setText("正在保存会话…")
+
+        b_save_manual.clicked.connect(manual_save)
+
         def on_login_done(ok: bool) -> None:
             self._login_running = False
+            b_save_manual.setEnabled(False)
             refresh_state()
             self.lab_bs_state.setText(
                 ("会话已保存 ✅ 之后真渲染会自动带上" if ok
@@ -394,6 +410,7 @@ class SettingsPage(QWidget):
                   "粘贴网址（可用\"粘贴\"键从剪贴板取）→ 弹出真实浏览器窗口，你登录/访问目标站一次并关闭窗口，"
                   "软件自动保存登录态。之后 JS 壳页面/风控站真渲染时会自动带上，无需手动导出 cookies")
         form.addRow("", b_login)
+        form.addRow("", b_save_manual)
         self.lab_bs_state.setStyleSheet(f"color:{C['muted']};font-size:12px;")
         form.addRow("", self.lab_bs_state)
         # 已保存会话明细列表
