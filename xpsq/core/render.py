@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -58,11 +59,12 @@ def _launch_browser(p, engine: str, headless: bool):
 
 
 def login_session(target_url: str, state_path: str, engine: str = "msedge",
-                  close_timeout_s: int = 300) -> bool:
+                  close_timeout_s: int = 180) -> bool:
     """弹出真实浏览器窗口，用户访问/登录目标站后关闭窗口即完成，保存会话。
 
     state_path 保存 storage state（含 cookies / localStorage）。
     返回是否成功保存。超时（close_timeout_s）未关闭窗口视为取消。
+    关窗检测三重保险：page close 事件 + browser disconnected + 后台轮询 ctx.pages。
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -74,17 +76,32 @@ def login_session(target_url: str, state_path: str, engine: str = "msedge",
             browser = _launch_browser(p, engine, headless=False)
             ctx = browser.new_context()
             page = ctx.new_page()
+            done = threading.Event()
+
+            def _all_closed() -> bool:
+                try:
+                    return not ctx.pages
+                except Exception:
+                    return True
+
+            page.on("close", lambda _pg: done.set() if _all_closed() else None)
+            browser.on("disconnected", lambda: done.set())
+
+            def _poll() -> None:
+                try:
+                    while not done.is_set():
+                        if _all_closed():
+                            done.set()
+                        time.sleep(0.5)
+                except Exception:
+                    done.set()
+
+            threading.Thread(target=_poll, daemon=True).start()
             try:
                 page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
             except Exception:
                 pass
-            # 等用户关闭所有页面窗口（关窗即保存）。用轮询 ctx.pages 判断，
-            # 比 page.close 事件更可靠（Firefox/Edge 关闭窗口后进程可能驻留）
-            deadline = time.time() + close_timeout_s
-            while ctx.pages:
-                if time.time() > deadline:
-                    break
-                time.sleep(0.5)
+            done.wait(timeout=close_timeout_s)
             ctx.storage_state(path=state_path)
             try:
                 browser.close()

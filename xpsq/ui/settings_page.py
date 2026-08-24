@@ -291,12 +291,11 @@ class SettingsPage(QWidget):
         b_login.setObjectName("primary")
 
         def state_domains() -> list[str]:
-            """从 storage state 提取会话覆盖的站点域名。"""
+            """从 storage state 提取会话覆盖的站点域名（去重）。"""
             try:
                 import json as _json
                 data = _json.loads(BROWSER_STATE.read_text(encoding="utf-8"))
                 doms = [c.get("domain", "") for c in data.get("cookies", []) if c.get("domain")]
-                # 去掉前导点并去重
                 clean = []
                 for d in doms:
                     d = d.lstrip(".")
@@ -306,22 +305,43 @@ class SettingsPage(QWidget):
             except Exception:
                 return []
 
+        def state_cookie_count() -> dict:
+            """站点域名 → cookie 数量。"""
+            try:
+                import json as _json
+                data = _json.loads(BROWSER_STATE.read_text(encoding="utf-8"))
+                cnt: dict[str, int] = {}
+                for c in data.get("cookies", []):
+                    d = str(c.get("domain", "")).lstrip(".")
+                    if d:
+                        cnt[d] = cnt.get(d, 0) + 1
+                return cnt
+            except Exception:
+                return {}
+
         def refresh_state() -> None:
+            self.bs_list.clear()
             if BROWSER_STATE.exists():
                 import time as _t
                 mt = _t.localtime(BROWSER_STATE.stat().st_mtime)
                 domains = state_domains()
+                counts = state_cookie_count()
                 if domains:
                     shown = "、".join(domains[:6])
                     more = f" 等 {len(domains)} 个站点" if len(domains) > 6 else ""
                     self.lab_bs_state.setText(
                         f"已保存会话（{_t.strftime('%Y-%m-%d %H:%M', mt)}）：{shown}{more}")
+                    for d in domains:
+                        n = counts.get(d, 0)
+                        self.bs_list.addItem(QListWidgetItem(f"● {d}　（{n} 个 cookie）"))
                 else:
                     self.lab_bs_state.setText(
                         f"已保存会话（{_t.strftime('%Y-%m-%d %H:%M', mt)}），但未检测到 cookies，"
                         "登录可能未生效——请重新登录并在弹窗中实际访问目标站")
+                    self.bs_list.addItem(QListWidgetItem("（无 cookie 数据）"))
             else:
                 self.lab_bs_state.setText("未保存会话")
+                self.bs_list.addItem(QListWidgetItem("尚未登录任何站点"))
 
         def resolve_engine() -> str:
             """浏览器引擎：优先取显式设置；为 auto 时跟随"伪装目标"。"""
@@ -376,6 +396,11 @@ class SettingsPage(QWidget):
         form.addRow("", b_login)
         self.lab_bs_state.setStyleSheet(f"color:{C['muted']};font-size:12px;")
         form.addRow("", self.lab_bs_state)
+        # 已保存会话明细列表
+        self.bs_list = QListWidget()
+        self.bs_list.setMaximumHeight(150)
+        self.bs_list.setStyleSheet("QListWidget{border:1px solid " + C['border'] + ";border-radius:8px;font-size:12px;}")
+        form.addRow("会话站点", self.bs_list)
         b_clear = QPushButton("清除已保存会话")
         b_clear.clicked.connect(clear_state)
         self._row(form, "管理", b_clear)
