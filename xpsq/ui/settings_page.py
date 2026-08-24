@@ -196,6 +196,14 @@ class SettingsPage(QWidget):
         self.cb_sub = QCheckBox("下载字幕")
         self.cb_sub.setChecked(bool(dl.get("subtitles", False)))
         self._row(form, "字幕", self.cb_sub)
+        self.sp_mt = QSpinBox()
+        self.sp_mt.setRange(1, 5)
+        self.sp_mt.setValue(int(dl.get("max_concurrent", 3)))
+        self._row(form, "同时下载任务数", self.sp_mt,
+                 "多任务并行数：几个下载同时进行，其余自动排队（同站点最多 2 个并行，防封）")
+        self.cb_pl = QCheckBox("默认整批下载播放列表/歌单")
+        self.cb_pl.setChecked(bool(dl.get("playlist", False)))
+        self._row(form, "播放列表", self.cb_pl, "勾选后链接是播放列表/歌单时默认下载全部")
         return self._scrolled(w)
 
     def _h(self, lay: QHBoxLayout) -> QWidget:
@@ -350,6 +358,8 @@ class SettingsPage(QWidget):
         d["audio_only"] = self.cb_audio.isChecked()
         d["sponsorblock"] = self.cb_sb.isChecked()
         d["subtitles"] = self.cb_sub.isChecked()
+        d["max_concurrent"] = self.sp_mt.value()
+        d["playlist"] = self.cb_pl.isChecked()
 
         a["default_output_format"] = ("html", "markdown", "txt")[self.cb_a_fmt.currentIndex()]
         a["download_images"] = self.cb_a_img.isChecked()

@@ -26,11 +26,13 @@ class VideoWorker(BaseWorker):
     """yt-dlp 主引擎；失败且为不支持的站点时，自动落到万能兜底嗅探器。"""
 
     def __init__(self, url: str, save_dir: str, cfg: dict, use_fallback: bool = True,
-                 audio_only: bool = False, audio_format: str = "mp3", parent=None):
+                 audio_only: bool = False, audio_format: str = "mp3", playlist: bool = False,
+                 parent=None):
         super().__init__(url, save_dir, cfg, parent)
         self.use_fallback = use_fallback
         self.audio_only = audio_only
         self.audio_format = audio_format
+        self.playlist = playlist
 
     def run(self) -> None:
         from ..core.video import FallbackSniffer, VideoDownloader
@@ -39,8 +41,9 @@ class VideoWorker(BaseWorker):
                                  progress_cb=lambda d: self.progress.emit(d),
                                  cancel_flag=lambda: self._cancel)
             result = dl.download(self.url, self.save_dir, audio_only=self.audio_only,
-                                 audio_format=self.audio_format)
-            if result.status == "failed" and result.error_code == ERR_UNSUPPORTED and self.use_fallback:
+                                 audio_format=self.audio_format, playlist=self.playlist)
+            if (result.status == "failed" and result.error_code == ERR_UNSUPPORTED
+                    and self.use_fallback and not self.playlist):
                 self.progress.emit({"event": "sniffing", "note": "主引擎不支持，尝试万能嗅探…"})
                 sniffer = FallbackSniffer(self.cfg,
                                           progress_cb=lambda d: self.progress.emit(d),

@@ -41,6 +41,14 @@ def _fmt_eta(sec: int) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
+def _cb(text: str, explain: str, checked: bool = False) -> QCheckBox:
+    """复选框 + 悬停帮助（鼠标停在文字上显示说明，不弹窗）。"""
+    cb = QCheckBox(text)
+    cb.setChecked(checked)
+    cb.setToolTip(explain)
+    return cb
+
+
 class _BasePanel(QWidget):
     mode = "video"
 
@@ -73,8 +81,9 @@ class _BasePanel(QWidget):
         self.dir_lay, self.dir_edit = _dir_row("保存到", default_dir)
         self.root.addLayout(self.dir_lay)
 
-        # 选项行（子类扩展）
-        self.opt_lay = QHBoxLayout()
+        # 选项区（FlowLayout 自动换行，窗口拉小不截断）
+        from .flow_layout import FlowLayout
+        self.opt_lay = FlowLayout()
         self.root.addLayout(self.opt_lay)
 
         # 按钮行
@@ -123,24 +132,24 @@ class _BasePanel(QWidget):
         if not url:
             self.status.setText("请先输入网址")
             return
-        if self.worker and self.worker.isRunning():
-            return
         save_dir = self.dir_edit.text().strip() or str(Path.home() / "Downloads")
         self._on_start(url, save_dir)
 
     def _on_start(self, url: str, save_dir: str) -> None:
+        """把任务提交进全局队列（多任务中心），不阻塞、可连续添加。"""
         self.cfg = load_config()
-        self.btn_start.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        self.status.setText("正在启动…")
+        self.status.setText("已加入下载队列…")
         # 清空上一次的结果卡片，避免新旧任务混淆
         self._show_empty_result()
-        self.worker = self._make_worker(url, save_dir)
-        self.worker.progress.connect(self._on_progress)
-        self.worker.finished_ok.connect(self._on_finished)
-        self.worker.start()
+        from .task_manager import TaskManager
+
+        def mk():
+            return self._make_worker(url, save_dir)
+
+        TaskManager.instance().submit(self, mk, url, save_dir)
 
     def _show_empty_result(self) -> None:
         """把结果区重置为占位提示。empty_lab 是常驻占位控件，永不删除。"""
@@ -185,7 +194,7 @@ class _BasePanel(QWidget):
             if total:
                 parts.append(f"/ {total/1048576:.1f} MB")
             if sp:
-                parts.append(f"{sp/1048576:.1f} MB/s")
+                parts.append(f"{sp/1024:.0f} KB/s" if sp < 1048576 else f"{sp/1048576:.1f} MB/s")
             if eta:
                 parts.append(f"剩余 {_fmt_eta(eta)}")
             note = d.get("note", "")
@@ -218,9 +227,9 @@ class _BasePanel(QWidget):
             "已取消" if result.status == "cancelled" else f"失败：{result.error_code}"))
 
     def _cancel(self) -> None:
-        if self.worker:
-            self.worker.cancel()
-            self.status.setText("正在取消…")
+        from .task_manager import TaskManager
+        TaskManager.instance().cancel_panel(self)
+        self.status.setText("正在取消…")
 
     def _refresh_history(self) -> None:
         self.history_list.clear()
@@ -248,14 +257,27 @@ class VideoPanel(_BasePanel):
         self.q_combo.addItems(["最佳画质", "1080p", "720p"])
         self.fmt_combo = QComboBox()
         self.fmt_combo.addItems(["mp4", "mkv", "原始格式"])
-        self.audio_check = QCheckBox("仅音频 (MP3)")
-        self.audio_check.setChecked(bool(dl.get("audio_only", False)))
-        self.sb_check = QCheckBox("跳过赞助段落 (SponsorBlock)")
-        self.sub_check = QCheckBox("下载字幕")
+        self.audio_check = _cb(
+            "仅音频 (MP3)",
+            "只下载视频里的音轨并转成 MP3，不保留画面。\n\n"
+            "适合：只想听歌/听课程，不想要视频文件。勾选后画质选项自动失效。",
+            bool(dl.get("audio_only", False)))
+        self.sb_check = _cb(
+            "跳过赞助段落 (SponsorBlock)",
+            "自动剪掉视频里博主口播的赞助/自我推广片段（基于社区众包标记数据库）。\n\n"
+            "主要适用于 YouTube 视频；剪片段需要 ffmpeg 重新封装，下载完成会稍慢。\n"
+            "冷门视频没有标记数据时会原样保留。")
+        self.sub_check = _cb(
+            "下载字幕",
+            "同时下载视频的字幕文件（有字幕的站点才会生效）。")
+        self.pl_check = _cb(
+            "整个播放列表/歌单",
+            "勾选后，如果链接是播放列表/歌单/专辑，将整批下载全部视频或歌曲，"
+            "而不是只下第一个。\n\n适合：B站收藏夹、YouTube 播放列表、网易云歌单。",
+            bool(dl.get("playlist", False)))
         for w in (QLabel("画质"), self.q_combo, QLabel("格式"), self.fmt_combo,
-                  self.audio_check, self.sb_check, self.sub_check):
+                  self.audio_check, self.sb_check, self.sub_check, self.pl_check):
             self.opt_lay.addWidget(w)
-        self.opt_lay.addStretch()
         self.audio_check.toggled.connect(
             lambda on: self.q_combo.setEnabled(not on))
 
@@ -270,8 +292,10 @@ class VideoPanel(_BasePanel):
         self.cfg["download"]["audio_only"] = audio_only
         self.cfg["download"]["sponsorblock"] = self.sb_check.isChecked()
         self.cfg["download"]["subtitles"] = self.sub_check.isChecked()
+        self.cfg["download"]["playlist"] = self.pl_check.isChecked()
         save_config(self.cfg)
-        return VideoWorker(url, save_dir, self.cfg, audio_only=audio_only)
+        return VideoWorker(url, save_dir, self.cfg, audio_only=audio_only,
+                           playlist=self.pl_check.isChecked())
 
 
 class MusicPanel(_BasePanel):
@@ -290,13 +314,19 @@ class MusicPanel(_BasePanel):
                 dl.get("music_format", "mp3"), 0))
         for w in (QLabel("音质"), self.audio_fmt_combo):
             self.opt_lay.addWidget(w)
-        self.opt_lay.addStretch()
+        self.pl_check = _cb(
+            "整个歌单/专辑",
+            "勾选后，网易云歌单/专辑链接将整批下载全部歌曲，而不是只下第一首。",
+            bool(dl.get("playlist", False)))
+        self.opt_lay.addWidget(self.pl_check)
 
     def _make_worker(self, url: str, save_dir: str):
         fmt = ("mp3", "mp3-320", "m4a", "raw")[self.audio_fmt_combo.currentIndex()]
         self.cfg.setdefault("download", {})["music_format"] = fmt
+        self.cfg["download"]["playlist"] = self.pl_check.isChecked()
         save_config(self.cfg)
-        return VideoWorker(url, save_dir, self.cfg, audio_only=True, audio_format=fmt)
+        return VideoWorker(url, save_dir, self.cfg, audio_only=True, audio_format=fmt,
+                           playlist=self.pl_check.isChecked())
 
 
 class ArticlePanel(_BasePanel):
@@ -308,11 +338,13 @@ class ArticlePanel(_BasePanel):
         art = self.cfg.get("article", {})
         self.fmt_combo = QComboBox()
         self.fmt_combo.addItems(["HTML（含插图，推荐）", "Markdown", "纯文本"])
-        self.img_check = QCheckBox("下载插图")
-        self.img_check.setChecked(art.get("download_images", True))
+        self.img_check = _cb(
+            "下载插图",
+            "把文章里的插图一并下载到本地文件夹，离线也能看图。\n\n"
+            "部分图片下载失败不影响正文，完成后会提示成功了几张。",
+            art.get("download_images", True))
         for w in (QLabel("输出格式"), self.fmt_combo, self.img_check):
             self.opt_lay.addWidget(w)
-        self.opt_lay.addStretch()
 
     def _make_worker(self, url: str, save_dir: str):
         fmt = ("html", "markdown", "txt")[self.fmt_combo.currentIndex()]

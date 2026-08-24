@@ -12,6 +12,7 @@ from ..core.ffmpeg import check_ffmpeg, find_ffmpeg
 from ..logging_setup import LOGS_DIR
 from .panels import ArticlePanel, MusicPanel, VideoPanel
 from .settings_page import SettingsPage
+from .tasks_view import TasksView
 from .theme import C
 
 
@@ -19,8 +20,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
-        self.resize(880, 620)
-        self.setMinimumSize(720, 520)
+        self.resize(980, 640)
+        self.setMinimumSize(640, 460)
         self._startup_selfcheck()
         self._build()
 
@@ -76,6 +77,11 @@ class MainWindow(QMainWindow):
         for p in (self.video_panel, self.music_panel, self.article_panel, self.settings_page):
             self.stack.addWidget(p)
         lay.addWidget(self.stack, 1)
+
+        # 右侧任务栏（常驻）
+        self.tasks_view = TasksView()
+        self.tasks_view.setFixedWidth(240)
+        lay.addWidget(self.tasks_view)
 
         self.nav.currentRowChanged.connect(lambda i: self.stack.setCurrentIndex(i))
 

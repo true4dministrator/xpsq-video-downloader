@@ -34,6 +34,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "subtitles": False,
         "thumbnail": False,
         "sponsorblock": False,
+        "playlist": False,                # True = 播放列表/歌单整批下载
+        "playlist_max": 0,                # 0 = 不限；>0 限制最多下载 N 个
+        "max_concurrent": 3,              # 多任务并发上限（1-5）
     },
     "article": {
         "default_output_format": "html",  # html / markdown / txt

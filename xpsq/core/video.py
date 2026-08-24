@@ -27,7 +27,7 @@ ProgressCb = Callable[[dict], None]
 
 def _build_ydl_opts(cfg: dict, save_dir: str, progress_cb: ProgressCb, task_logger: TaskLogger,
                     cancel_flag: Callable[[], bool] | None = None,
-                    audio_only: bool = False) -> dict:
+                    audio_only: bool = False, playlist: bool = False) -> dict:
     net = cfg.get("network", {})
     dl = cfg.get("download", {})
     ck = cfg.get("cookies", {})
@@ -50,7 +50,7 @@ def _build_ydl_opts(cfg: dict, save_dir: str, progress_cb: ProgressCb, task_logg
         "format": fmt_sel,
         "merge_output_format": None if audio_only else (
             "mp4" if fmt == "mp4" else "mkv" if fmt == "mkv" else None),
-        "noplaylist": True,
+        "noplaylist": not playlist,
         "quiet": True,
         "no_warnings": True,
         "concurrent_fragment_downloads": int(net.get("concurrency", 8)),
@@ -62,6 +62,14 @@ def _build_ydl_opts(cfg: dict, save_dir: str, progress_cb: ProgressCb, task_logg
         "noprogress": True,
         "windowsfilenames": True,
     }
+    if playlist:
+        opts["ignoreerrors"] = True  # 列表里单个失败不中断整体
+        try:
+            pmax = int(dl.get("playlist_max", 0))
+        except Exception:
+            pmax = 0
+        if pmax > 0:
+            opts["playlistend"] = pmax
     # 显式告知 yt-dlp ffmpeg 位置（打包版不在 PATH 上，必须显式传入）
     ffmpeg_path = find_ffmpeg()
     if ffmpeg_path:
@@ -148,19 +156,19 @@ class VideoDownloader:
                               "postprocessor": d.get("postprocessor", "")})
 
     def download(self, url: str, save_dir: str, audio_only: bool = False,
-                 audio_format: str = "mp3") -> TaskResult:
+                 audio_format: str = "mp3", playlist: bool = False) -> TaskResult:
         import yt_dlp
         task_id = new_task_id()
         result = TaskResult(mode="video", task_id=task_id, url=url, env=version.APP_NAME_EN)
         logger = TaskLogger(task_id)
         result.log_file = logger.file
         logger.log("video_start", {"url": url, "save_dir": save_dir, "audio_only": audio_only,
-                                   "audio_format": audio_format})
+                                   "audio_format": audio_format, "playlist": playlist})
         try:
             self._started = time.time()
             self._downloaded = 0.0
             opts = _build_ydl_opts(self.cfg, save_dir, self._hook, logger, self.cancel_flag,
-                                   audio_only=audio_only)
+                                   audio_only=audio_only, playlist=playlist)
             if not find_ffmpeg():
                 opts["nopart"] = False  # 无 ffmpeg 时单文件流可直接下载
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -168,6 +176,23 @@ class VideoDownloader:
                 info = ydl.extract_info(url, download=True)
                 if info is None:
                     raise AppError(ERR_UNSUPPORTED, "未解析到任何视频信息")
+                # 播放列表模式：返回的是 playlist 信息，取下载文件数
+                if info.get("_type") == "playlist" or info.get("entries"):
+                    entries = [e for e in (info.get("entries") or []) if e]
+                    done = sum(1 for e in entries if e.get("_filename")
+                               or (e.get("requested_downloads") and e["requested_downloads"][0].get("filepath")))
+                    total = len(entries)
+                    title = info.get("title") or "播放列表"
+                    filename = f"{title}（{done}/{total} 个视频）"
+                    path = str(Path(save_dir)) if Path(save_dir).exists() else ""
+                    result.mark_success(
+                        title=title, extractor=str(info.get("extractor") or "playlist"),
+                        filename=filename, path=path, size_bytes=int(self._downloaded),
+                        media_format="playlist", segments=total,
+                        elapsed_s=time.time() - self._started,
+                    )
+                    logger.log("video_success", {"playlist": True, "done": done, "total": total})
+                    return result
                 filename = ydl.prepare_filename(info)
                 final = info.get("_filename") or filename
                 path = final if os.path.exists(final) else (
@@ -698,7 +723,33 @@ class FallbackSniffer:
             media, kind = self._extract_l4_api(page_url, set(), page_url)
             if media:
                 return media, kind
+        # L5 真渲染兜底（JS 壳页面：用系统 Edge 无头渲染 + 捕获网络直链）
+        if depth == 0:
+            media_url = self._render_fallback(page_url)
+            if media_url:
+                return media_url, ("m3u8" if ".m3u8" in media_url.lower() else "mp4")
         return None, None
+
+    def _render_fallback(self, page_url: str) -> str | None:
+        """L5：Playwright 驱动系统 Edge 渲染页面，优先取网络捕获的媒体直链，
+        其次对渲染后 DOM 再跑一遍嗅探。失败返回 None。"""
+        self.progress_cb({"event": "sniffing", "note": "静态嗅探无果，尝试无头浏览器真渲染…"})
+        try:
+            from .render import render_page
+        except Exception:
+            return None
+        html, media_urls = render_page(page_url)
+        if media_urls:
+            for u in media_urls:
+                if _M3U8_RE.search(u):
+                    return self._resolve_m3u8(u, page_url)
+                if _MEDIA_RE.search(u):
+                    return u
+            return media_urls[0]  # 无扩展名但 content-type 判定的直链
+        if html and html != page_url:
+            media, kind = self._sniff_content(page_url, html, set(), 1)
+            return media if media else None
+        return None
 
     # ---------- 入口 ----------
     def sniff(self, url: str) -> tuple[str | None, str]:
