@@ -275,11 +275,36 @@ class SettingsPage(QWidget):
         b_login = QPushButton("登录并保存会话")
         b_login.setObjectName("primary")
 
+        def state_domains() -> list[str]:
+            """从 storage state 提取会话覆盖的站点域名。"""
+            try:
+                import json as _json
+                data = _json.loads(BROWSER_STATE.read_text(encoding="utf-8"))
+                doms = [c.get("domain", "") for c in data.get("cookies", []) if c.get("domain")]
+                # 去掉前导点并去重
+                clean = []
+                for d in doms:
+                    d = d.lstrip(".")
+                    if d and d not in clean:
+                        clean.append(d)
+                return clean
+            except Exception:
+                return []
+
         def refresh_state() -> None:
             if BROWSER_STATE.exists():
                 import time as _t
                 mt = _t.localtime(BROWSER_STATE.stat().st_mtime)
-                self.lab_bs_state.setText(f"已保存会话：{_t.strftime('%Y-%m-%d %H:%M', mt)}（{BROWSER_STATE.stat().st_size} 字节）")
+                domains = state_domains()
+                if domains:
+                    shown = "、".join(domains[:6])
+                    more = f" 等 {len(domains)} 个站点" if len(domains) > 6 else ""
+                    self.lab_bs_state.setText(
+                        f"已保存会话（{_t.strftime('%Y-%m-%d %H:%M', mt)}）：{shown}{more}")
+                else:
+                    self.lab_bs_state.setText(
+                        f"已保存会话（{_t.strftime('%Y-%m-%d %H:%M', mt)}），但未检测到 cookies，"
+                        "登录可能未生效——请重新登录并在弹窗中实际访问目标站")
             else:
                 self.lab_bs_state.setText("未保存会话")
 

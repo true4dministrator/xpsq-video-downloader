@@ -99,6 +99,7 @@ class TasksView(QWidget):
         name.setToolTip(item.url)
         st = QLabel(_STATUS_TEXT.get(item.status, item.status))
         st.setObjectName("task_status")
+        st.setFixedWidth(52)  # 固定宽度，避免被"取消"按钮挤掉文字
         st.setStyleSheet(f"color:{C['muted']};font-size:11px;")
         b_cancel = QPushButton("取消")
         b_cancel.clicked.connect(lambda: TaskManager.instance().cancel(item.task_id))

@@ -57,10 +57,15 @@ class VideoWorker(BaseWorker):
                     else:
                         diag = getattr(sniffer, "diag", {}) or {}
                         if diag.get("render_error"):
+                            err = str(diag.get("render_error", ""))[:150]
+                            session_note = ("已加载浏览器会话"
+                                            if diag.get("render_session")
+                                            else "未加载浏览器会话（请先到 设置 → 浏览器会话 登录该站点一次）")
                             result.friendly = (
-                                f"无头浏览器渲染失败（{diag['render_error'][:120]}）。"
-                                "请先在 设置 → 浏览器会话 登录该站点一次；"
-                                "或浏览器 F12 → Network → Media 找直链粘贴回来")
+                                f"无头浏览器渲染失败：{err}\n\n"
+                                f"当前状态：{session_note}\n"
+                                "仍可自救：浏览器打开视频页 → F12 → Network → 筛选 Media → 播放，"
+                                "复制出现的 mp4/m3u8 链接粘贴回来下载")
                         elif diag.get("page_state"):
                             result.friendly = (
                                 f"页面处于异常状态（{diag['page_state']}），"

@@ -80,7 +80,7 @@ class MainWindow(QMainWindow):
 
         # 右侧任务栏（常驻）
         self.tasks_view = TasksView()
-        self.tasks_view.setFixedWidth(240)
+        self.tasks_view.setFixedWidth(260)
         lay.addWidget(self.tasks_view)
 
         self.nav.currentRowChanged.connect(lambda i: self.stack.setCurrentIndex(i))
