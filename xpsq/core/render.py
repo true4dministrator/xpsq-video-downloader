@@ -24,6 +24,22 @@ _MEDIA_CT = ("mpegurl", "video/", "audio/", "application/octet-stream")
 
 render_last_error = ""  # 最近一次渲染失败的原因（诊断用）
 
+# 登录/渲染过程日志（供排障）
+_session_log: list[str] = []
+
+
+def _slog(msg: str) -> None:
+    """记录浏览器会话过程日志（内存 + 追加到 LOGS_DIR/browser_session.log）。"""
+    line = f"[{time.strftime('%H:%M:%S')}] {msg}"
+    _session_log.append(line)
+    try:
+        from ..config import LOGS_DIR
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LOGS_DIR / "browser_session.log", "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
 # 引擎 → (playwright 启动器属性, channel)
 _ENGINES = {
     "msedge": ("chromium", "msedge"),
@@ -68,12 +84,15 @@ def login_session(target_url: str, state_path: str, engine: str = "msedge",
     """
     try:
         from playwright.sync_api import sync_playwright
-    except Exception:
+    except Exception as e:
+        _slog(f"playwright import 失败: {e}")
         return False
     _ensure_browser_path()
+    _slog(f"启动登录会话 engine={engine} url={target_url[:60]}")
     try:
         with sync_playwright() as p:
             browser = _launch_browser(p, engine, headless=False)
+            _slog("浏览器已启动")
             ctx = browser.new_context()
             page = ctx.new_page()
             done = threading.Event()
@@ -84,13 +103,23 @@ def login_session(target_url: str, state_path: str, engine: str = "msedge",
                 except Exception:
                     return True
 
-            page.on("close", lambda _pg: done.set() if _all_closed() else None)
-            browser.on("disconnected", lambda: done.set())
+            def _on_close(_pg) -> None:
+                _slog(f"页面关闭事件触发, 剩余页面: {len(ctx.pages)}")
+                if _all_closed():
+                    done.set()
+
+            def _on_disconnected() -> None:
+                _slog("浏览器断连事件触发")
+                done.set()
+
+            page.on("close", _on_close)
+            browser.on("disconnected", _on_disconnected)
 
             def _poll() -> None:
                 try:
                     while not done.is_set():
                         if _all_closed():
+                            _slog("轮询检测到所有页面已关闭")
                             done.set()
                         time.sleep(0.5)
                 except Exception:
@@ -99,16 +128,20 @@ def login_session(target_url: str, state_path: str, engine: str = "msedge",
             threading.Thread(target=_poll, daemon=True).start()
             try:
                 page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
-            except Exception:
-                pass
+                _slog("goto 完成")
+            except Exception as e:
+                _slog(f"goto 异常(继续等待关窗): {str(e)[:100]}")
             done.wait(timeout=close_timeout_s)
+            _slog("检测到关窗/超时，保存会话")
             ctx.storage_state(path=state_path)
+            _slog("会话已保存")
             try:
                 browser.close()
             except Exception:
                 pass
         return True
-    except Exception:
+    except Exception as e:
+        _slog(f"login_session 异常: {str(e)[:150]}")
         return False
 
 
