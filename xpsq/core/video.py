@@ -741,7 +741,11 @@ class FallbackSniffer:
         except Exception as e:
             self.diag["render_error"] = f"import: {e}"
             return None
-        engine = str(self.cfg.get("network", {}).get("browser_engine", "msedge") or "msedge")
+        engine = str(self.cfg.get("network", {}).get("browser_engine", "auto") or "auto")
+        if engine == "auto":  # auto 跟随伪装目标
+            imp = str(self.cfg.get("network", {}).get("impersonate", "chrome") or "chrome")
+            engine = {"firefox": "firefox", "chrome": "chrome",
+                      "edge": "msedge"}.get(imp, "msedge")
         state_path = None
         try:
             from ..config import BROWSER_STATE

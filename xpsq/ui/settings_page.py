@@ -107,6 +107,12 @@ class SettingsPage(QWidget):
     def _switch(self, row: int) -> None:
         if 0 <= row < len(CATEGORIES):
             self.stack.setCurrentIndex(row)
+            # 切到浏览器会话分类时刷新会话状态显示
+            if CATEGORIES[row] == "浏览器会话" and hasattr(self, "refresh_bs_state"):
+                try:
+                    self.refresh_bs_state()
+                except Exception:
+                    pass
 
     def _page(self) -> tuple[QWidget, QFormLayout]:
         w = QWidget()
@@ -163,10 +169,10 @@ class SettingsPage(QWidget):
         self.ed_proxy.setPlaceholderText("http://127.0.0.1:7890 · 留空为直连")
         self._row(form, "HTTP 代理", self.ed_proxy)
         self.cb_engine = QComboBox()
-        self.cb_engine.addItems(["msedge", "chrome", "firefox"])
-        self.cb_engine.setCurrentText(net.get("browser_engine", "msedge"))
+        self.cb_engine.addItems(["auto", "msedge", "chrome", "firefox"])
+        self.cb_engine.setCurrentText(net.get("browser_engine", "auto"))
         self._row(form, "浏览器引擎", self.cb_engine,
-                  "真渲染和登录会话使用的浏览器（系统需已安装）：Edge 默认；Chrome/Firefox 按你的常用浏览器选")
+                  "真渲染和登录会话使用的浏览器：auto 跟随上方的伪装目标（选 firefox 就用 firefox）；也可手动指定")
         self.cb_tls = QCheckBox("启用 TLS 指纹伪装")
         self.cb_tls.setChecked(bool(net.get("tls_impersonation", True)))
         self._row(form, "TLS 伪装", self.cb_tls)
@@ -267,6 +273,7 @@ class SettingsPage(QWidget):
     def _page_browser(self) -> QWidget:
         w, form = self._page()
         from ..config import BROWSER_STATE
+        self._login_running = False
         self.ed_bs_url = QLineEdit()
         self.ed_bs_url.setPlaceholderText("粘贴要登录的网站地址，如 https://example.com")
         b_paste = QPushButton("粘贴")
@@ -316,13 +323,27 @@ class SettingsPage(QWidget):
             else:
                 self.lab_bs_state.setText("未保存会话")
 
+        def resolve_engine() -> str:
+            """浏览器引擎：优先取显式设置；为 auto 时跟随"伪装目标"。"""
+            net = self.cfg.get("network", {})
+            engine = str(net.get("browser_engine", "auto") or "auto")
+            if engine == "auto":
+                imp = str(net.get("impersonate", "chrome") or "chrome")
+                return {"firefox": "firefox", "chrome": "chrome",
+                        "edge": "msedge"}.get(imp, "msedge")
+            return engine
+
         def do_login() -> None:
+            if self._login_running:
+                self.lab_bs_state.setText("已有登录窗口在等待，请先完成或关闭它")
+                return
             url = self.ed_bs_url.text().strip()
             if not url.startswith(("http://", "https://")):
                 self.lab_bs_state.setText("请先输入以 http(s):// 开头的网站地址")
                 return
             from ..core.render import login_session
-            engine = str(self.cfg.get("network", {}).get("browser_engine", "msedge") or "msedge")
+            engine = resolve_engine()
+            self._login_running = True
             self.lab_bs_state.setText(
                 f"已弹出{engine}窗口，请在窗口中登录/访问目标站后关闭窗口（关闭即自动保存）…")
             # 后台线程执行，避免阻塞界面（登录窗口关闭前 UI 保持可操作）
@@ -331,6 +352,7 @@ class SettingsPage(QWidget):
                 daemon=True).start()
 
         def on_login_done(ok: bool) -> None:
+            self._login_running = False
             refresh_state()
             self.lab_bs_state.setText(
                 ("会话已保存 ✅ 之后真渲染会自动带上" if ok
@@ -338,6 +360,7 @@ class SettingsPage(QWidget):
 
         self.login_done.connect(on_login_done)
         b_login.clicked.connect(do_login)
+        self.refresh_bs_state = refresh_state
 
         def clear_state() -> None:
             try:
