@@ -20,7 +20,7 @@ from .theme import C, apply_theme
 GITHUB_URL = "https://github.com/true4dministrator/xpsq-video-downloader"
 BLOG_URL = "https://zchlab.space"
 
-CATEGORIES = ["通用", "网络与代理", "下载", "文章提取", "Cookies 登录", "关于"]
+CATEGORIES = ["通用", "网络与代理", "下载", "文章提取", "Cookies 登录", "浏览器会话", "关于"]
 
 
 class SettingsPage(QWidget):
@@ -52,6 +52,7 @@ class SettingsPage(QWidget):
             "下载": self._page_download(),
             "文章提取": self._page_article(),
             "Cookies 登录": self._page_cookies(),
+            "浏览器会话": self._page_browser(),
             "关于": self._page_about(),
         }
         for name in CATEGORIES:
@@ -252,6 +253,70 @@ class SettingsPage(QWidget):
         tip.setWordWrap(True)
         tip.setStyleSheet(f"color:{C['warn_text']};background:{C['warn_bg']};border-radius:8px;padding:10px;")
         form.addRow(tip)
+        return self._scrolled(w)
+
+    # ---------------- 浏览器会话 ----------------
+    def _page_browser(self) -> QWidget:
+        w, form = self._page()
+        from ..config import BROWSER_STATE
+        self.ed_bs_url = QLineEdit()
+        self.ed_bs_url.setPlaceholderText("粘贴要登录的网站地址，如 https://example.com")
+        b_paste = QPushButton("粘贴")
+
+        def paste_url() -> None:
+            from PySide6.QtGui import QGuiApplication
+            self.ed_bs_url.setText(QGuiApplication.clipboard().text().strip())
+
+        b_paste.clicked.connect(paste_url)
+        url_row = QHBoxLayout()
+        url_row.addWidget(self.ed_bs_url, 1)
+        url_row.addWidget(b_paste)
+        self.lab_bs_state = QLabel("")
+        b_login = QPushButton("登录并保存会话")
+        b_login.setObjectName("primary")
+
+        def refresh_state() -> None:
+            if BROWSER_STATE.exists():
+                import time as _t
+                mt = _t.localtime(BROWSER_STATE.stat().st_mtime)
+                self.lab_bs_state.setText(f"已保存会话：{_t.strftime('%Y-%m-%d %H:%M', mt)}（{BROWSER_STATE.stat().st_size} 字节）")
+            else:
+                self.lab_bs_state.setText("未保存会话")
+
+        def do_login() -> None:
+            url = self.ed_bs_url.text().strip()
+            if not url.startswith(("http://", "https://")):
+                self.lab_bs_state.setText("请先输入以 http(s):// 开头的网站地址")
+                return
+            from ..core.render import login_session
+            self.lab_bs_state.setText("已弹出浏览器窗口，请在窗口中登录/访问目标站后关闭窗口…")
+            ok = login_session(url, str(BROWSER_STATE))
+            refresh_state()
+            self.lab_bs_state.setText(
+                ("会话已保存 ✅ 之后真渲染会自动带上" if ok else "未保存（超时或出错），请重试"))
+
+        def clear_state() -> None:
+            try:
+                BROWSER_STATE.unlink(missing_ok=True)
+            except Exception:
+                pass
+            refresh_state()
+
+        b_login.clicked.connect(do_login)
+        self._row(form, "一键登录", self._h(url_row),
+                  "粘贴网址（可用\"粘贴\"键从剪贴板取）→ 弹出真实浏览器窗口，你登录/访问目标站一次并关闭窗口，"
+                  "软件自动保存登录态。之后 JS 壳页面/风控站（如 ukdevilz）真渲染时会自动带上，无需手动导出 cookies")
+        form.addRow("", b_login)
+        self.lab_bs_state.setStyleSheet(f"color:{C['muted']};font-size:12px;")
+        form.addRow("", self.lab_bs_state)
+        b_clear = QPushButton("清除已保存会话")
+        b_clear.clicked.connect(clear_state)
+        self._row(form, "管理", b_clear)
+        tip = QLabel("会话只保存在本机（AppData 下），不上传。仅用于访问你有权查看的内容。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet(f"color:{C['warn_text']};background:{C['warn_bg']};border-radius:8px;padding:10px;")
+        form.addRow(tip)
+        refresh_state()
         return self._scrolled(w)
 
     # ---------------- 关于 ----------------

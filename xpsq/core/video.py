@@ -732,13 +732,20 @@ class FallbackSniffer:
 
     def _render_fallback(self, page_url: str) -> str | None:
         """L5：Playwright 驱动系统 Edge 渲染页面，优先取网络捕获的媒体直链，
-        其次对渲染后 DOM 再跑一遍嗅探。失败返回 None。"""
+        其次对渲染后 DOM 再跑一遍嗅探。带已保存的浏览器会话（若存在）。失败返回 None。"""
         self.progress_cb({"event": "sniffing", "note": "静态嗅探无果，尝试无头浏览器真渲染…"})
         try:
             from .render import render_page
         except Exception:
             return None
-        html, media_urls = render_page(page_url)
+        state_path = None
+        try:
+            from ..config import BROWSER_STATE
+            if BROWSER_STATE.exists():
+                state_path = str(BROWSER_STATE)
+        except Exception:
+            pass
+        html, media_urls = render_page(page_url, state_path=state_path)
         if media_urls:
             for u in media_urls:
                 if _M3U8_RE.search(u):

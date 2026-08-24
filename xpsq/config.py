@@ -9,6 +9,7 @@ from typing import Any
 APP_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "XpsqDownloader"
 CONFIG_FILE = APP_DIR / "config.json"
 LOGS_DIR = APP_DIR / "logs"
+BROWSER_STATE = APP_DIR / "browser_state.json"  # Playwright 浏览器登录会话（storage state）
 DEFAULT_DOWNLOAD_DIR = Path.home() / "Downloads"
 
 DEFAULT_CONFIG: dict[str, Any] = {
