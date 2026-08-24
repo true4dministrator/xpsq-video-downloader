@@ -15,6 +15,8 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 _MEDIA_HINT = (".m3u8", ".mp4", ".webm", ".m4a", ".mp3", ".ts", ".mov", ".flv")
 _MEDIA_CT = ("mpegurl", "video/", "audio/", "application/octet-stream")
 
+render_last_error = ""  # 最近一次渲染失败的原因（诊断用）
+
 
 def login_session(target_url: str, state_path: str, close_timeout_s: int = 300) -> bool:
     """弹出真实 Edge 窗口，用户访问/登录目标站后关闭窗口即完成，保存会话。
@@ -55,10 +57,13 @@ def render_page(url: str, wait_ms: int = 6000, timeout_ms: int = 20000,
 
     state_path：已保存的浏览器会话（storage state JSON），传入则自动带 cookies/登录态。
     懒加载 playwright：未安装时直接返回空结果，不影响其他功能。
+    失败原因记录到模块级 render_last_error（供诊断）。
     """
+    global render_last_error
     try:
         from playwright.sync_api import sync_playwright
-    except Exception:
+    except Exception as e:
+        render_last_error = f"playwright import: {e}"
         return None, []
 
     media: list[str] = []
@@ -100,5 +105,6 @@ def render_page(url: str, wait_ms: int = 6000, timeout_ms: int = 20000,
             html = page.content()
             browser.close()
         return html, list(dict.fromkeys(media))
-    except Exception:
+    except Exception as e:
+        render_last_error = f"render: {e}"
         return None, []

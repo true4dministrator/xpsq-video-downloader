@@ -737,17 +737,21 @@ class FallbackSniffer:
         其次对渲染后 DOM 再跑一遍嗅探。带已保存的浏览器会话（若存在）。失败返回 None。"""
         self.progress_cb({"event": "sniffing", "note": "静态嗅探无果，尝试无头浏览器真渲染…"})
         try:
-            from .render import render_page
-        except Exception:
+            from .render import render_page, render_last_error
+        except Exception as e:
+            self.diag["render_error"] = f"import: {e}"
             return None
         state_path = None
         try:
             from ..config import BROWSER_STATE
             if BROWSER_STATE.exists():
                 state_path = str(BROWSER_STATE)
+                self.diag["render_session"] = "已加载"
         except Exception:
             pass
         html, media_urls = render_page(page_url, state_path=state_path)
+        if render_last_error:
+            self.diag["render_error"] = render_last_error
         if media_urls:
             for u in media_urls:
                 if _M3U8_RE.search(u):
@@ -789,6 +793,12 @@ class FallbackSniffer:
             return self._sniff_content(url, html, set(), 0)
         except Exception as exc:
             self.diag["error"] = str(exc)[:200]
+            # 页面请求失败（TLS 指纹/反爬拦截）：仍尝试 L5 真渲染兜底，
+            # 浏览器 Edge 是独立网络栈，可能绕过 requests/curl_cffi 被拒
+            self.progress_cb({"event": "sniffing", "note": "页面请求被拦截，尝试无头浏览器渲染…"})
+            media_url = self._render_fallback(url)
+            if media_url:
+                return media_url, ("m3u8" if ".m3u8" in media_url.lower() else "mp4")
             return None, None
 
     def download(self, media_url: str, kind: str, save_dir: str, referer: str) -> TaskResult:
