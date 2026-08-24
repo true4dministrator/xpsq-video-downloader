@@ -78,6 +78,8 @@ class TasksView(QWidget):
             w = self.list.itemWidget(row)
             if w is not None:
                 self._update_row_widget(w, item)
+                # 行高随内容变化刷新，避免按钮/文字被裁剪
+                row.setSizeHint(w.sizeHint())
         self._refresh_count()
 
     def _on_finished(self, item: TaskItem) -> None:
@@ -93,9 +95,11 @@ class TasksView(QWidget):
         top = QHBoxLayout()
         short = item.url if len(item.url) <= 22 else item.url[:20] + "…"
         name = QLabel(short)
+        name.setObjectName("task_name")
         name.setStyleSheet(f"color:{C['text']};font-size:12px;")
         name.setToolTip(item.url)
         st = QLabel(_STATUS_TEXT.get(item.status, item.status))
+        st.setObjectName("task_status")
         st.setStyleSheet(f"color:{C['muted']};font-size:11px;")
         b_cancel = QPushButton("取消")
         b_cancel.setFixedWidth(44)
@@ -113,20 +117,25 @@ class TasksView(QWidget):
         lay.addWidget(bar)
         # 详情行
         detail = QLabel("")
+        detail.setObjectName("task_detail")
         detail.setStyleSheet(f"color:{C['faint']};font-size:11px;")
         lay.addWidget(detail)
         return w
 
     def _update_row_widget(self, w: QWidget, item: TaskItem) -> None:
-        st = w.findChild(QLabel, "", Qt.FindChildOption.FindChildrenRecursively)
-        labels = [l for l in w.findChildren(QLabel)]
+        name = w.findChild(QLabel, "task_name")
+        st = w.findChild(QLabel, "task_status")
+        detail = w.findChild(QLabel, "task_detail")
         bars = w.findChildren(QProgressBar)
-        bars[0].setValue(0)
+        bar = bars[0] if bars else None
+        if bar is not None:
+            bar.setValue(0)
         if item.status == "running":
             d = item.progress or {}
             ev = d.get("event")
             pct = int(d.get("percent", 0) or 0)
-            bars[0].setValue(pct)
+            if bar is not None:
+                bar.setValue(pct)
             sp = d.get("speed") or 0
             done = d.get("downloaded", 0) or 0
             total = d.get("total", 0) or 0
@@ -139,27 +148,28 @@ class TasksView(QWidget):
             if eta:
                 parts.append(f"剩余 {_fmt_eta(eta)}")
             if ev == "extracting":
-                labels[1].setText("正在解析页面…")
+                detail.setText("正在解析页面…")
             elif ev == "postprocessing":
-                labels[1].setText("正在合并/转码…")
+                detail.setText("正在合并/转码…")
             else:
-                labels[1].setText(" · ".join(parts))
-            labels[0].setText(_STATUS_TEXT["running"])
+                detail.setText(" · ".join(parts))
+            st.setText(_STATUS_TEXT["running"])
         elif item.status == "success":
-            bars[0].setValue(100)
+            if bar is not None:
+                bar.setValue(100)
             size = item.result.size_bytes if item.result else 0
-            labels[1].setText(f"{size/1048576:.1f} MB" if size else "完成")
-            labels[0].setText("完成")
+            detail.setText(f"{size/1048576:.1f} MB" if size else "完成")
+            st.setText("完成")
         elif item.status == "failed":
             code = item.result.error_code if item.result else "ERR"
-            labels[1].setText(f"失败：{code}")
-            labels[0].setText("失败")
+            detail.setText(f"失败：{code}")
+            st.setText("失败")
         elif item.status == "cancelled":
-            labels[0].setText("已取消")
-            labels[1].setText("")
+            st.setText("已取消")
+            detail.setText("")
         else:
-            labels[0].setText("排队中")
-            labels[1].setText("等待空闲位置…")
+            st.setText("排队中")
+            detail.setText("等待空闲位置…")
 
     def _refresh_count(self) -> None:
         tasks = TaskManager.instance().tasks()
