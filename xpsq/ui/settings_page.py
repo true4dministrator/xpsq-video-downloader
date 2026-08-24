@@ -1,9 +1,10 @@
 """设置页：通用 / 网络与代理 / 下载 / 文章提取 / Cookies / 关于。"""
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout,
                                QFrame, QHBoxLayout, QLabel, QLineEdit,
@@ -24,6 +25,8 @@ CATEGORIES = ["通用", "网络与代理", "下载", "文章提取", "Cookies �
 
 
 class SettingsPage(QWidget):
+    login_done = Signal(bool)  # 浏览器会话登录完成（后台线程发信号）
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.cfg = load_config()
@@ -314,11 +317,21 @@ class SettingsPage(QWidget):
                 self.lab_bs_state.setText("请先输入以 http(s):// 开头的网站地址")
                 return
             from ..core.render import login_session
-            self.lab_bs_state.setText("已弹出浏览器窗口，请在窗口中登录/访问目标站后关闭窗口…")
-            ok = login_session(url, str(BROWSER_STATE))
+            self.lab_bs_state.setText(
+                "浏览器窗口已弹出，请在窗口中登录/访问目标站后关闭窗口（关闭即自动保存）…")
+            # 后台线程执行，避免阻塞界面（登录窗口关闭前 UI 保持可操作）
+            threading.Thread(target=lambda: (
+                self.login_done.emit(login_session(url, str(BROWSER_STATE)))),
+                daemon=True).start()
+
+        def on_login_done(ok: bool) -> None:
             refresh_state()
             self.lab_bs_state.setText(
-                ("会话已保存 ✅ 之后真渲染会自动带上" if ok else "未保存（超时或出错），请重试"))
+                ("会话已保存 ✅ 之后真渲染会自动带上" if ok
+                 else "未保存（超时或出错），请重试"))
+
+        self.login_done.connect(on_login_done)
+        b_login.clicked.connect(do_login)
 
         def clear_state() -> None:
             try:
