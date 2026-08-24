@@ -711,8 +711,7 @@ class FallbackSniffer:
                 return self._resolve_m3u8(u, page_url), 'm3u8'
             if _MEDIA_RE.search(u):
                 return u, 'mp4'
-        if _BLOB_RE.search(html):
-            return None, 'blob'
+        is_blob = bool(_BLOB_RE.search(html))
         # L3 递归（iframe + JS 资源）
         if depth < 2:
             media, kind = self._extract_l3(page_url, html, visited, depth)
@@ -728,6 +727,9 @@ class FallbackSniffer:
             media_url = self._render_fallback(page_url)
             if media_url:
                 return media_url, ("m3u8" if ".m3u8" in media_url.lower() else "mp4")
+        # blob 检测放最后：blob 页面也要先试完 L3/L4/L5（blob 流可能被渲染后转为真实直链）
+        if is_blob:
+            return None, 'blob'
         return None, None
 
     def _render_fallback(self, page_url: str) -> str | None:
