@@ -65,10 +65,19 @@ def load_config() -> dict:
     try:
         if CONFIG_FILE.exists():
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return _deep_merge(DEFAULT_CONFIG, json.load(f))
+                cfg = _deep_merge(DEFAULT_CONFIG, json.load(f))
+        else:
+            cfg = dict(DEFAULT_CONFIG)
+    except Exception:
+        cfg = dict(DEFAULT_CONFIG)
+    # 迁移：旧默认浏览器引擎 msedge → auto（跟随伪装目标），用户显式选择除外
+    try:
+        net = cfg.setdefault("network", {})
+        if net.get("browser_engine") == "msedge":
+            net["browser_engine"] = "auto"
     except Exception:
         pass
-    return dict(DEFAULT_CONFIG)
+    return cfg
 
 
 def save_config(cfg: dict) -> None:

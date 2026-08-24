@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
-import threading
+import time
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -74,14 +74,17 @@ def login_session(target_url: str, state_path: str, engine: str = "msedge",
             browser = _launch_browser(p, engine, headless=False)
             ctx = browser.new_context()
             page = ctx.new_page()
-            closed = threading.Event()
-            page.on("close", lambda: closed.set())
             try:
                 page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
             except Exception:
                 pass
-            # 等用户关闭页面窗口（关窗即保存）；Edge 可能驻留后台进程，所以不依赖 is_connected
-            closed.wait(timeout=close_timeout_s)
+            # 等用户关闭所有页面窗口（关窗即保存）。用轮询 ctx.pages 判断，
+            # 比 page.close 事件更可靠（Firefox/Edge 关闭窗口后进程可能驻留）
+            deadline = time.time() + close_timeout_s
+            while ctx.pages:
+                if time.time() > deadline:
+                    break
+                time.sleep(0.5)
             ctx.storage_state(path=state_path)
             try:
                 browser.close()
