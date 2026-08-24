@@ -162,6 +162,11 @@ class SettingsPage(QWidget):
         self.ed_proxy = QLineEdit(net.get("proxy", ""))
         self.ed_proxy.setPlaceholderText("http://127.0.0.1:7890 · 留空为直连")
         self._row(form, "HTTP 代理", self.ed_proxy)
+        self.cb_engine = QComboBox()
+        self.cb_engine.addItems(["msedge", "chrome", "firefox"])
+        self.cb_engine.setCurrentText(net.get("browser_engine", "msedge"))
+        self._row(form, "浏览器引擎", self.cb_engine,
+                  "真渲染和登录会话使用的浏览器（系统需已安装）：Edge 默认；Chrome/Firefox 按你的常用浏览器选")
         self.cb_tls = QCheckBox("启用 TLS 指纹伪装")
         self.cb_tls.setChecked(bool(net.get("tls_impersonation", True)))
         self._row(form, "TLS 伪装", self.cb_tls)
@@ -317,11 +322,12 @@ class SettingsPage(QWidget):
                 self.lab_bs_state.setText("请先输入以 http(s):// 开头的网站地址")
                 return
             from ..core.render import login_session
+            engine = str(self.cfg.get("network", {}).get("browser_engine", "msedge") or "msedge")
             self.lab_bs_state.setText(
-                "浏览器窗口已弹出，请在窗口中登录/访问目标站后关闭窗口（关闭即自动保存）…")
+                f"已弹出{engine}窗口，请在窗口中登录/访问目标站后关闭窗口（关闭即自动保存）…")
             # 后台线程执行，避免阻塞界面（登录窗口关闭前 UI 保持可操作）
             threading.Thread(target=lambda: (
-                self.login_done.emit(login_session(url, str(BROWSER_STATE)))),
+                self.login_done.emit(login_session(url, str(BROWSER_STATE), engine=engine))),
                 daemon=True).start()
 
         def on_login_done(ok: bool) -> None:
@@ -343,7 +349,7 @@ class SettingsPage(QWidget):
         b_login.clicked.connect(do_login)
         self._row(form, "一键登录", self._h(url_row),
                   "粘贴网址（可用\"粘贴\"键从剪贴板取）→ 弹出真实浏览器窗口，你登录/访问目标站一次并关闭窗口，"
-                  "软件自动保存登录态。之后 JS 壳页面/风控站（如 ukdevilz）真渲染时会自动带上，无需手动导出 cookies")
+                  "软件自动保存登录态。之后 JS 壳页面/风控站真渲染时会自动带上，无需手动导出 cookies")
         form.addRow("", b_login)
         self.lab_bs_state.setStyleSheet(f"color:{C['muted']};font-size:12px;")
         form.addRow("", self.lab_bs_state)
@@ -454,6 +460,7 @@ class SettingsPage(QWidget):
         n["sleep_interval"] = self.sp_sleep.value()
         n["proxy"] = self.ed_proxy.text().strip()
         n["tls_impersonation"] = self.cb_tls.isChecked()
+        n["browser_engine"] = self.cb_engine.currentText()
 
         d["default_dir"] = self.ed_dir.text().strip()
         d["default_quality"] = ("best", "1080", "720")[self.cb_quality.currentIndex()]

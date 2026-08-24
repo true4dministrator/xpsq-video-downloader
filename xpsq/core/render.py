@@ -1,13 +1,19 @@
 """Playwright 真渲染：JS 壳页面最后的兜底 + 浏览器一键登录会话。
 
-用系统 Edge（channel=msedge，无需下载浏览器）：
+支持三种系统浏览器引擎（无需下载任何浏览器）：
+- msedge：系统 Edge（Windows 自带，默认）
+- chrome：系统 Chrome（如已安装）
+- firefox：系统 Firefox（如已安装）
+
 - render_page：无头渲染页面 + 捕获网络媒体直链；若存在已保存的浏览器会话则自动带上 cookies
-- login_session：弹出真实 Edge 窗口让用户登录目标站一次，把 storage state（cookies/登录态）
-  保存到本地文件，之后渲染/嗅探自动复用，能救 ukdevilz 这类 WAF 站
+- login_session：弹出真实浏览器窗口让用户登录目标站一次，把 storage state（cookies/登录态）
+  保存到本地文件，之后渲染/嗅探自动复用，能救风控型 WAF 站
 """
 from __future__ import annotations
 
-import time
+import os
+import sys
+import threading
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -17,9 +23,43 @@ _MEDIA_CT = ("mpegurl", "video/", "audio/", "application/octet-stream")
 
 render_last_error = ""  # 最近一次渲染失败的原因（诊断用）
 
+# 引擎 → (playwright 启动器属性, channel)
+_ENGINES = {
+    "msedge": ("chromium", "msedge"),
+    "chrome": ("chromium", "chrome"),
+    "firefox": ("firefox", None),  # 用 playwright 内置 firefox 构建
+}
 
-def login_session(target_url: str, state_path: str, close_timeout_s: int = 300) -> bool:
-    """弹出真实 Edge 窗口，用户访问/登录目标站后关闭窗口即完成，保存会话。
+
+def _ensure_browser_path() -> None:
+    """PyInstaller 打包版：浏览器构建位于 _internal/ms-playwright，提前告知 playwright。"""
+    if getattr(sys, "frozen", False):
+        try:
+            internal = os.path.join(os.path.dirname(sys.executable), "_internal", "ms-playwright")
+            if os.path.isdir(internal):
+                os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", internal)
+        except Exception:
+            pass
+
+
+def _launch_browser(p, engine: str, headless: bool):
+    """按引擎启动浏览器。返回 browser 或抛异常（原因写入 render_last_error）。"""
+    global render_last_error
+    name, channel = _ENGINES.get(engine, _ENGINES["msedge"])
+    browser_type = getattr(p, name)
+    kwargs: dict = {"headless": headless}
+    if channel:
+        kwargs["channel"] = channel
+    try:
+        return browser_type.launch(**kwargs)
+    except Exception as e:
+        render_last_error = f"启动 {engine} 失败: {e}"
+        raise
+
+
+def login_session(target_url: str, state_path: str, engine: str = "msedge",
+                  close_timeout_s: int = 300) -> bool:
+    """弹出真实浏览器窗口，用户访问/登录目标站后关闭窗口即完成，保存会话。
 
     state_path 保存 storage state（含 cookies / localStorage）。
     返回是否成功保存。超时（close_timeout_s）未关闭窗口视为取消。
@@ -28,18 +68,20 @@ def login_session(target_url: str, state_path: str, close_timeout_s: int = 300) 
         from playwright.sync_api import sync_playwright
     except Exception:
         return False
+    _ensure_browser_path()
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(channel="msedge", headless=False)
+            browser = _launch_browser(p, engine, headless=False)
             ctx = browser.new_context()
             page = ctx.new_page()
-            page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
-            # 等用户操作完并关闭浏览器窗口
-            deadline = time.time() + close_timeout_s
-            while browser.is_connected():
-                if time.time() > deadline:
-                    break
-                time.sleep(0.5)
+            closed = threading.Event()
+            page.on("close", lambda: closed.set())
+            try:
+                page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+            except Exception:
+                pass
+            # 等用户关闭页面窗口（关窗即保存）；Edge 可能驻留后台进程，所以不依赖 is_connected
+            closed.wait(timeout=close_timeout_s)
             ctx.storage_state(path=state_path)
             try:
                 browser.close()
@@ -52,10 +94,12 @@ def login_session(target_url: str, state_path: str, close_timeout_s: int = 300) 
 
 def render_page(url: str, wait_ms: int = 6000, timeout_ms: int = 20000,
                 extra_headers: dict | None = None,
-                state_path: str | None = None) -> tuple[str | None, list[str]]:
+                state_path: str | None = None,
+                engine: str = "msedge") -> tuple[str | None, list[str]]:
     """渲染页面，返回 (渲染后 HTML, 捕获的媒体直链列表)。失败返回 (None, [])。
 
     state_path：已保存的浏览器会话（storage state JSON），传入则自动带 cookies/登录态。
+    engine：msedge / chrome / firefox。
     懒加载 playwright：未安装时直接返回空结果，不影响其他功能。
     失败原因记录到模块级 render_last_error（供诊断）。
     """
@@ -65,11 +109,12 @@ def render_page(url: str, wait_ms: int = 6000, timeout_ms: int = 20000,
     except Exception as e:
         render_last_error = f"playwright import: {e}"
         return None, []
+    _ensure_browser_path()
 
     media: list[str] = []
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(channel="msedge", headless=True)
+            browser = _launch_browser(p, engine, headless=True)
             ctx_kwargs = {"user_agent": UA}
             if state_path:
                 try:

@@ -741,6 +741,7 @@ class FallbackSniffer:
         except Exception as e:
             self.diag["render_error"] = f"import: {e}"
             return None
+        engine = str(self.cfg.get("network", {}).get("browser_engine", "msedge") or "msedge")
         state_path = None
         try:
             from ..config import BROWSER_STATE
@@ -749,7 +750,7 @@ class FallbackSniffer:
                 self.diag["render_session"] = "已加载"
         except Exception:
             pass
-        html, media_urls = render_page(page_url, state_path=state_path)
+        html, media_urls = render_page(page_url, state_path=state_path, engine=engine)
         if render_last_error:
             self.diag["render_error"] = render_last_error
         if media_urls:

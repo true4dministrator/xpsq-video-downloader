@@ -25,6 +25,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "sleep_interval": 2,              # 请求间隔(秒)
         "proxy": "",                      # 留空 = 直连
         "tls_impersonation": True,
+        "browser_engine": "msedge",       # 真渲染/登录会话用浏览器: msedge / chrome / firefox
     },
     "download": {
         "default_dir": str(DEFAULT_DOWNLOAD_DIR),
